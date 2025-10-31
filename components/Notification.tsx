@@ -24,20 +24,21 @@ const colors: Record<NotificationType, string> = {
 const Notification: React.FC<NotificationProps> = ({ message, type, onClose }) => {
     const [visible, setVisible] = useState(false);
 
+    const handleClose = () => {
+        setVisible(false);
+        setTimeout(onClose, 300); // Allow fade-out animation before calling parent's onClose
+    };
+
     useEffect(() => {
         setVisible(true); // Trigger fade-in
         const timer = setTimeout(() => {
-            setVisible(false);
-            setTimeout(onClose, 300); // Allow fade-out animation before unmounting
-        }, 3700);
+            handleClose();
+        }, 3700); // A bit less than 4s to account for fade-out animation
 
         return () => clearTimeout(timer);
-    }, [message, type, onClose]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []); // Run only on mount
     
-    const handleClose = () => {
-        setVisible(false);
-        setTimeout(onClose, 300);
-    }
 
   return (
     <div

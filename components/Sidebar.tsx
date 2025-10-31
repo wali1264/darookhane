@@ -1,10 +1,18 @@
-import React, { useState } from 'react';
-import { Page } from '../types';
+import React, { useState, useMemo } from 'react';
+import { Page, Permission } from '../types';
 import { BarChart3, Pill, ShoppingCart, Truck, Landmark, Settings, ChevronLeft, ChevronRight, Dna } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
 
 interface SidebarProps {
   activePage: Page;
   setActivePage: (page: Page) => void;
+}
+
+interface NavItemConfig {
+  id: Page;
+  icon: React.ReactNode;
+  text: string;
+  permission: Permission;
 }
 
 const NavItem: React.FC<{ icon: React.ReactNode; text: string; active: boolean; onClick: () => void; collapsed: boolean }> = ({ icon, text, active, onClick, collapsed }) => {
@@ -37,15 +45,18 @@ const NavItem: React.FC<{ icon: React.ReactNode; text: string; active: boolean; 
 
 const Sidebar: React.FC<SidebarProps> = ({ activePage, setActivePage }) => {
   const [collapsed, setCollapsed] = useState(false);
+  const { hasPermission } = useAuth();
 
-  const navItems = [
-    { id: 'Dashboard', icon: <BarChart3 size={22} />, text: 'داشبورد' },
-    { id: 'Inventory', icon: <Pill size={22} />, text: 'انبارداری' },
-    { id: 'Sales', icon: <ShoppingCart size={22} />, text: 'فروش (POS)' },
-    { id: 'Purchases', icon: <Truck size={22} />, text: 'خریدها' },
-    { id: 'Accounting', icon: <Landmark size={22} />, text: 'حسابداری' },
-    { id: 'Settings', icon: <Settings size={22} />, text: 'تنظیمات' },
+  const allNavItems: NavItemConfig[] = [
+    { id: 'Dashboard', icon: <BarChart3 size={22} />, text: 'داشبورد', permission: 'page:dashboard' },
+    { id: 'Inventory', icon: <Pill size={22} />, text: 'انبارداری', permission: 'page:inventory' },
+    { id: 'Sales', icon: <ShoppingCart size={22} />, text: 'فروش (POS)', permission: 'page:sales' },
+    { id: 'Purchases', icon: <Truck size={22} />, text: 'خریدها', permission: 'page:purchases' },
+    { id: 'Accounting', icon: <Landmark size={22} />, text: 'حسابداری', permission: 'page:accounting' },
+    { id: 'Settings', icon: <Settings size={22} />, text: 'تنظیمات', permission: 'page:settings' },
   ];
+
+  const visibleNavItems = useMemo(() => allNavItems.filter(item => hasPermission(item.permission)), [hasPermission]);
 
   return (
     <aside className={`relative bg-gray-800 text-gray-200 h-screen transition-all duration-300 ease-in-out ${collapsed ? 'w-20' : 'w-64'}`}>
@@ -62,7 +73,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activePage, setActivePage }) => {
       </div>
       <nav className="flex-1 px-2 py-4">
         <ul>
-          {navItems.map(item => (
+          {visibleNavItems.map(item => (
             <NavItem
               key={item.id}
               icon={item.icon}

@@ -1,4 +1,79 @@
+// FIX: Removed a self-import of 'Page' which was causing a name conflict.
 export type Page = 'Dashboard' | 'Inventory' | 'Sales' | 'Purchases' | 'Accounting' | 'Settings';
+
+// --- Activity Log Types ---
+export type ActivityActionType = 'CREATE' | 'UPDATE' | 'DELETE' | 'LOGIN' | 'LOGOUT' | 'BACKUP' | 'RESTORE';
+export type ActivityEntityType = 
+  | 'Drug' | 'Supplier' | 'PurchaseInvoice' | 'SaleInvoice' | 'Payment' 
+  | 'ClinicService' | 'ServiceProvider' | 'ClinicTransaction' 
+  | 'SimpleAccountingColumn' | 'SimpleAccountingEntry'
+  | 'User' | 'Role' | 'SupplierAccount' | 'Settings' | 'Authentication';
+
+export interface ActivityLog {
+    id?: number;
+    timestamp: string; // ISO string
+    userId: number; // Changed back to number to match our custom 'users' table ID
+    username: string;
+    actionType: ActivityActionType;
+    entity: ActivityEntityType;
+    entityId: string;
+    details: any; // Flexible object to store relevant data, e.g., { before: {}, after: {} } or { created: {} }
+}
+
+
+// --- Permissions for Role-Based Access Control (RBAC) ---
+export const PERMISSIONS = {
+  // Page Access
+  'page:dashboard': 'مشاهده داشبورد',
+  'page:inventory': 'دسترسی به انبارداری',
+  'page:sales': 'دسترسی به فروش (POS)',
+  'page:purchases': 'دسترسی به خریدها',
+  'page:accounting': 'دسترسی به حسابداری',
+  'page:settings': 'دسترسی به تنظیمات',
+  // Fine-grained Permissions
+  'inventory:create': 'افزودن داروی جدید',
+  'inventory:edit': 'ویرایش اطلاعات دارو',
+  'inventory:delete': 'حذف دارو',
+  'sales:create': 'ثبت فاکتور فروش',
+  'sales:edit': 'ویرایش فاکتور فروش',
+  'purchases:create': 'ثبت فاکتور خرید',
+  'purchases:edit': 'ویرایش فاکتور خرید',
+  'accounting:suppliers:manage': 'مدیریت تامین‌کنندگان و پرداخت‌ها',
+  'accounting:clinic:manage': 'مدیریت خدمات و صندوق کلینیک',
+  'accounting:simple:manage': 'مدیریت حسابداری ساده',
+  'settings:users:view': 'مشاهده کاربران',
+  'settings:users:manage': 'مدیریت کاربران (افزودن/ویرایش/حذف)',
+  'settings:roles:view': 'مشاهده نقش‌ها',
+  'settings:roles:manage': 'مدیریت نقش‌ها و دسترسی‌ها',
+  'settings:portal:manage': 'مدیریت پورتال تامین‌کنندگان',
+  'settings:backup:manage': 'پشتیبان‌گیری و بازیابی اطلاعات',
+  'settings:alerts:manage': 'مدیریت هشدارها',
+} as const;
+
+export type Permission = keyof typeof PERMISSIONS;
+
+
+export interface Role {
+  id?: number;
+  name: string;
+  permissions: Permission[];
+  isEditable: boolean; // To protect the default Admin role
+}
+
+export interface User {
+  id?: number;
+  username: string;
+  passwordHash: string; // Will store plain text for now, but ready for hashing
+  roleId: number;
+}
+
+export interface SupplierAccount {
+  id?: number;
+  supplierId: number;
+  username: string;
+  passwordHash: string;
+}
+
 
 export enum DrugType {
   TABLET = 'قرص',
@@ -104,4 +179,37 @@ export interface ClinicTransaction {
   amount: number;
   date: string; // ISO string
   ticketNumber: number;
+}
+
+export interface SimpleAccountingColumn {
+  id?: number;
+  name: string;
+  type: 'income' | 'expense';
+  order: number;
+}
+
+export interface SimpleAccountingEntry {
+  id?: number;
+  date: string; // YYYY-MM-DD
+  patientName: string;
+  description: string;
+  values: { [columnId: number]: number }; // e.g., { 1: 50.00, 3: 120.50 }
+}
+
+export interface SyncQueueItem {
+    id?: number;
+    entity: string; // e.g., 'drugs', 'suppliers'
+    action: 'create' | 'update' | 'delete';
+    payload: any;
+    timestamp: number;
+}
+
+export type ExpiryThreshold = {
+    value: number;
+    unit: 'days' | 'weeks' | 'months';
+}
+
+export interface AppSetting {
+  key: 'expiryAlertThreshold' | 'lowStockThreshold';
+  value: ExpiryThreshold | number;
 }

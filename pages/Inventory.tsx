@@ -1,16 +1,55 @@
-import React, { useState, FormEvent, useRef, useEffect } from 'react';
+import React, { useState, FormEvent, useRef, useEffect, useMemo } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
-import { Drug, DrugType } from '../types';
+import { Drug, DrugBatch, DrugType, ExpiryThreshold } from '../types';
 import Modal from '../components/Modal';
-import { Plus, Edit, Trash2, Sparkles } from 'lucide-react';
-import HandwritingToggleButton from '../components/HandwritingToggleButton';
+import { Plus, Edit, Trash2, Sparkles, PackageOpen } from 'lucide-react';
+import { useVoiceInput } from '../hooks/useVoiceInput';
+import VoiceControlHeader from '../components/VoiceControlHeader';
+import { useAuth } from '../contexts/AuthContext';
+import { useNotification } from '../contexts/NotificationContext';
+import { logActivity } from '../lib/activityLogger';
 
 const Inventory: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
+  const [selectedDrugForBatches, setSelectedDrugForBatches] = useState<Drug | null>(null);
   const [editingDrug, setEditingDrug] = useState<Drug | null>(null);
+  const { hasPermission } = useAuth();
+  const { showNotification } = useNotification();
 
   const drugs = useLiveQuery(() => db.drugs.toArray(), []);
+  const drugBatches = useLiveQuery(() => db.drugBatches.toArray(), []);
+  const settings = useLiveQuery(() => db.settings.toArray());
+
+  const expiryAlertThreshold: ExpiryThreshold = useMemo(() => 
+    (settings?.find(s => s.key === 'expiryAlertThreshold')?.value as ExpiryThreshold) ?? { value: 3, unit: 'months' }, 
+  [settings]);
+
+  const earliestExpiryDates = useMemo(() => {
+    if (!drugBatches) return new Map<number, string>();
+
+    const expiryMap = new Map<number, string>();
+
+    for (const batch of drugBatches) {
+      if (batch.quantityInStock <= 0) continue; // Only consider batches with stock
+
+      const existingExpiry = expiryMap.get(batch.drugId);
+      if (!existingExpiry || new Date(batch.expiryDate) < new Date(existingExpiry)) {
+        expiryMap.set(batch.drugId, batch.expiryDate);
+      }
+    }
+    return expiryMap;
+  }, [drugBatches]);
+  
+  const getExpiryTargetDate = useMemo(() => {
+    const { value, unit } = expiryAlertThreshold;
+    const targetDate = new Date();
+    if (unit === 'days') targetDate.setDate(targetDate.getDate() + value);
+    if (unit === 'weeks') targetDate.setDate(targetDate.getDate() + value * 7);
+    if (unit === 'months') targetDate.setMonth(targetDate.getMonth() + value);
+    return targetDate;
+  }, [expiryAlertThreshold]);
 
   const openModalForNew = () => {
     setEditingDrug(null);
@@ -21,18 +60,39 @@ const Inventory: React.FC = () => {
     setEditingDrug(drug);
     setIsModalOpen(true);
   };
+  
+  const openBatchModal = (drug: Drug) => {
+    setSelectedDrugForBatches(drug);
+    setIsBatchModalOpen(true);
+  };
 
   const closeModal = () => {
     setIsModalOpen(false);
+    setIsBatchModalOpen(false);
     setEditingDrug(null);
+    setSelectedDrugForBatches(null);
   };
 
   const handleDelete = async (id?: number) => {
     if (id && window.confirm('آیا از حذف این دارو و تمام بچ‌های موجودی آن مطمئن هستید؟')) {
-      await db.transaction('rw', db.drugs, db.drugBatches, async () => {
-        await db.drugBatches.where({ drugId: id }).delete();
-        await db.drugs.delete(id);
-      });
+      try {
+        const drugToDelete = await db.drugs.get(id);
+        if (!drugToDelete) {
+          showNotification('دارو یافت نشد.', 'error');
+          return;
+        }
+
+        await db.transaction('rw', db.drugs, db.drugBatches, db.activityLog, async () => {
+          await db.drugBatches.where({ drugId: id }).delete();
+          await db.drugs.delete(id);
+          await logActivity('DELETE', 'Drug', String(id), { deletedDrug: drugToDelete });
+        });
+        
+        showNotification('دارو با موفقیت حذف شد.', 'success');
+      } catch (error) {
+        console.error("Failed to delete drug:", error);
+        showNotification('خطا در حذف دارو.', 'error');
+      }
     }
   };
 
@@ -40,13 +100,15 @@ const Inventory: React.FC = () => {
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h2 className="text-3xl font-bold text-white">مدیریت انبار</h2>
-        <button
-          onClick={openModalForNew}
-          className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-        >
-          <Plus size={20} />
-          <span>افزودن داروی جدید</span>
-        </button>
+        {hasPermission('inventory:create') && (
+            <button
+            onClick={openModalForNew}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+            >
+            <Plus size={20} />
+            <span>افزودن داروی جدید</span>
+            </button>
+        )}
       </div>
       <div className="bg-gray-800 rounded-lg shadow-lg overflow-hidden border border-gray-700">
         <div className="overflow-x-auto">
@@ -61,18 +123,25 @@ const Inventory: React.FC = () => {
               </tr>
             </thead>
             <tbody>
-              {drugs?.map(drug => (
-                <tr key={drug.id} className="bg-gray-800 border-b border-gray-700 hover:bg-gray-700/50">
-                  <td className="px-6 py-4 font-medium text-white whitespace-nowrap">{drug.name}</td>
-                  <td className="px-6 py-4">{drug.company}</td>
-                  <td className="px-6 py-4">{drug.totalStock}</td>
-                  <td className="px-6 py-4">${drug.salePrice.toFixed(2)}</td>
-                  <td className="px-6 py-4 flex items-center gap-4">
-                    <button onClick={() => openModalForEdit(drug)} className="text-blue-400 hover:text-blue-300"><Edit size={18} /></button>
-                    <button onClick={() => handleDelete(drug.id)} className="text-red-400 hover:text-red-300"><Trash2 size={18} /></button>
-                  </td>
-                </tr>
-              ))}
+              {drugs?.map(drug => {
+                const earliestExpiry = earliestExpiryDates.get(drug.id!);
+                const expiryDate = earliestExpiry ? new Date(earliestExpiry) : null;
+                const isSoonToExpire = expiryDate && expiryDate < getExpiryTargetDate;
+
+                return (
+                    <tr key={drug.id} className="bg-gray-800 border-b border-gray-700 hover:bg-gray-700/50">
+                        <td className={`px-6 py-4 font-medium whitespace-nowrap ${isSoonToExpire ? 'text-yellow-400' : 'text-white'}`}>{drug.name}</td>
+                        <td className="px-6 py-4">{drug.company}</td>
+                        <td className="px-6 py-4">{drug.totalStock}</td>
+                        <td className="px-6 py-4">${drug.salePrice.toFixed(2)}</td>
+                        <td className="px-6 py-4 flex items-center gap-4">
+                            <button onClick={() => openBatchModal(drug)} className="text-gray-400 hover:text-white" title="مشاهده بچ‌ها"><PackageOpen size={18} /></button>
+                            {hasPermission('inventory:edit') && <button onClick={() => openModalForEdit(drug)} className="text-blue-400 hover:text-blue-300" title="ویرایش"><Edit size={18} /></button>}
+                            {hasPermission('inventory:delete') && <button onClick={() => handleDelete(drug.id)} className="text-red-400 hover:text-red-300" title="حذف"><Trash2 size={18} /></button>}
+                        </td>
+                    </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -80,8 +149,49 @@ const Inventory: React.FC = () => {
       {isModalOpen && (
         <DrugFormModal drug={editingDrug} onClose={closeModal} />
       )}
+      {isBatchModalOpen && selectedDrugForBatches && (
+        <BatchDetailsModal drug={selectedDrugForBatches} onClose={closeModal} />
+      )}
     </div>
   );
+};
+
+const BatchDetailsModal: React.FC<{ drug: Drug; onClose: () => void }> = ({ drug, onClose }) => {
+    const batches = useLiveQuery(() => db.drugBatches.where('drugId').equals(drug.id!).filter(b => b.quantityInStock > 0).toArray(), [drug.id]);
+
+    return (
+        <Modal title={`بچ‌های موجود برای: ${drug.name}`} onClose={onClose}>
+            <div className="max-h-96 overflow-y-auto">
+                {batches && batches.length > 0 ? (
+                    <table className="w-full text-sm text-right text-gray-300">
+                        <thead className="text-xs text-gray-400 uppercase bg-gray-700/50 sticky top-0">
+                            <tr>
+                                <th scope="col" className="px-4 py-2">شماره لات</th>
+                                <th scope="col" className="px-4 py-2">تعداد موجود</th>
+                                <th scope="col" className="px-4 py-2">تاریخ انقضا</th>
+                                <th scope="col" className="px-4 py-2">قیمت خرید</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-700">
+                            {batches.map(batch => (
+                                <tr key={batch.id}>
+                                    <td className="px-4 py-3 font-medium text-white">{batch.lotNumber}</td>
+                                    <td className="px-4 py-3">{batch.quantityInStock}</td>
+                                    <td className="px-4 py-3">{new Date(batch.expiryDate).toLocaleDateString('fa-IR')}</td>
+                                    <td className="px-4 py-3">${batch.purchasePrice.toFixed(2)}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                ) : (
+                    <p className="text-center text-gray-500 py-8">هیچ بچ با موجودی برای این دارو یافت نشد.</p>
+                )}
+            </div>
+             <div className="flex justify-end pt-4 mt-4 border-t border-gray-600">
+                <button type="button" onClick={onClose} className="px-4 py-2 bg-gray-600 rounded-lg hover:bg-gray-500">بستن</button>
+            </div>
+        </Modal>
+    );
 };
 
 // This form now handles the definition of a drug AND its initial batch.
@@ -95,12 +205,13 @@ type DrugFormData = Omit<Drug, 'id' | 'purchasePrice' | 'salePrice' | 'totalStoc
 
 
 const DrugFormModal: React.FC<{ drug: Drug | null; onClose: () => void; }> = ({ drug, onClose }) => {
+  const { showNotification } = useNotification();
   const [formData, setFormData] = useState<DrugFormData>({
     name: drug?.name || '',
     company: drug?.company || '',
     purchasePrice: drug?.purchasePrice ?? '',
     salePrice: drug?.salePrice ?? '',
-    totalStock: drug?.totalStock ?? '', // Represents initial stock for a new drug
+    totalStock: '', // Always empty for editing, only for new
     type: drug?.type || DrugType.TABLET,
     barcode: drug?.barcode || '',
     internalBarcode: drug?.internalBarcode || '',
@@ -112,8 +223,68 @@ const DrugFormModal: React.FC<{ drug: Drug | null; onClose: () => void; }> = ({ 
   const [isExpiryDateValid, setIsExpiryDateValid] = useState(true);
   const formRef = useRef<HTMLFormElement>(null);
   
-  // Note: For editing, we currently don't load batch info to keep the form simple.
-  // The primary use case is adding a new drug with its first batch.
+  const focusOrder = [
+    'name',
+    'company',
+    'purchasePrice',
+    'salePrice',
+    'lotNumber',
+    'expiryDate',
+    'totalStock',
+    'barcode',
+    'internalBarcode'
+  ];
+
+  const handleVoiceTranscript = (transcript: string) => {
+    const form = formRef.current;
+    if (!form) return;
+
+    const activeElement = document.activeElement as HTMLElement;
+    if (!activeElement || !form.contains(activeElement) || !('name' in activeElement && activeElement.name)) {
+        return;
+    }
+    const currentFocusedInputName = (activeElement as HTMLInputElement).name;
+
+
+    const normalizeTranscript = (text: string, fieldName: string) => {
+      const persianDigitsMap: { [key: string]: string } = { '۰': '0', '۱': '1', '۲': '2', '۳': '3', '۴': '4', '۵': '5', '۶': '6', '۷': '7', '۸': '8', '۹': '9' };
+      let normalized = text;
+      
+      const numericFields = ['purchasePrice', 'salePrice', 'totalStock', 'lotNumber', 'expiryDate', 'barcode', 'internalBarcode'];
+      if (numericFields.includes(fieldName)) {
+        for (const key in persianDigitsMap) {
+          normalized = normalized.replace(new RegExp(key, 'g'), persianDigitsMap[key]);
+        }
+        // Remove spaces for purely numeric fields
+        if (['purchasePrice', 'salePrice', 'totalStock'].includes(fieldName)) {
+            normalized = normalized.replace(/ /g, '');
+        }
+      }
+      return normalized.trim();
+    };
+    
+    const processedTranscript = normalizeTranscript(transcript, currentFocusedInputName);
+    
+    if (currentFocusedInputName === 'expiryDate') {
+        setIsExpiryDateValid(validateExpiry(processedTranscript));
+    }
+
+    setFormData(prev => ({ ...prev, [currentFocusedInputName]: processedTranscript }));
+
+    let currentIndex = focusOrder.indexOf(currentFocusedInputName);
+    if (currentIndex > -1) {
+        for (let i = currentIndex + 1; i < focusOrder.length; i++) {
+            const nextInputName = focusOrder[i];
+            const nextElement = form.elements.namedItem(nextInputName) as HTMLElement & { disabled?: boolean };
+            if (nextElement && !nextElement.disabled) {
+                setTimeout(() => nextElement.focus(), 100);
+                break;
+            }
+        }
+    }
+  };
+
+  const voiceControls = useVoiceInput({ onTranscript: handleVoiceTranscript });
 
   useEffect(() => {
     const form = formRef.current;
@@ -123,6 +294,23 @@ const DrugFormModal: React.FC<{ drug: Drug | null; onClose: () => void; }> = ({ 
       if (e.key === 'Enter') {
         e.preventDefault();
         const target = e.target as HTMLElement;
+
+        if (target.nodeName === 'INPUT' && 'name' in target && target.name) {
+             // FIX: The `in` operator confirms `name` exists, but TypeScript infers its type
+             // on a generic HTMLElement as `unknown`. Casting to `string` is needed for `indexOf`.
+             let currentIndex = focusOrder.indexOf(target.name as string);
+             if (currentIndex > -1) {
+                for (let i = currentIndex + 1; i < focusOrder.length; i++) {
+                    const nextInputName = focusOrder[i];
+                    const nextElement = form.elements.namedItem(nextInputName) as HTMLElement & { disabled?: boolean };
+                    if (nextElement && !nextElement.disabled) {
+                        nextElement.focus();
+                        return; // Exit after focusing the correct element
+                    }
+                }
+             }
+        }
+        // Fallback for elements not in focusOrder or for the last element
         const focusable = Array.from(
           form.querySelectorAll('input, select, button')
         ) as HTMLElement[];
@@ -137,13 +325,12 @@ const DrugFormModal: React.FC<{ drug: Drug | null; onClose: () => void; }> = ({ 
     return () => {
       form.removeEventListener('keydown', handleKeyDown);
     };
-  }, []);
+  }, [focusOrder]);
 
   const validateExpiry = (value: string): boolean => {
       const trimmedValue = value.trim();
-      if (!trimmedValue) return true; // Empty is valid from a format perspective
+      if (!trimmedValue) return true;
 
-      // Check for YYYY-MM-DD format, which might be set by the onBlur handler
       const yyyy_mm_dd_regex = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/;
       const yyyy_mm_dd_match = trimmedValue.match(yyyy_mm_dd_regex);
       if (yyyy_mm_dd_match) {
@@ -154,7 +341,6 @@ const DrugFormModal: React.FC<{ drug: Drug | null; onClose: () => void; }> = ({ 
           return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day && year > 2000 && year < 2100;
       }
 
-      // Original regex for user input formats (M/YYYY, YYYY/M, MMYYYY)
       const regex = /^(?:(\d{1,2})[\s\/-]?)(\d{4})$|^(\d{4})[\s\/-]?(\d{1,2})$/;
       const match = trimmedValue.match(regex);
       let monthStr, yearStr;
@@ -165,6 +351,8 @@ const DrugFormModal: React.FC<{ drug: Drug | null; onClose: () => void; }> = ({ 
       } else if (/^\d{5,6}$/.test(trimmedValue)) {
         monthStr = trimmedValue.slice(0, -4);
         yearStr = trimmedValue.slice(-4);
+      } else if (/^\d{1,4}$/.test(trimmedValue)) { // Handle incomplete voice inputs like "22"
+        return false;
       }
 
       if (monthStr && yearStr) {
@@ -177,22 +365,15 @@ const DrugFormModal: React.FC<{ drug: Drug | null; onClose: () => void; }> = ({ 
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
-
     if (name === 'expiryDate') {
       setIsExpiryDateValid(validateExpiry(value));
     }
-
-    if (name === 'purchasePrice' || name === 'salePrice' || name === 'totalStock') {
-       // Allow empty string or valid number input
-      setFormData(prev => ({ ...prev, [name]: value === '' ? '' : parseFloat(value) }));
-    } else {
-      setFormData(prev => ({ ...prev, [name]: value }));
-    }
+    setFormData(prev => ({ ...prev, [name]: value }));
   };
   
   const handleExpiryDateBlur = (e: React.FocusEvent<HTMLInputElement>) => {
     const value = e.target.value.trim();
-    if (!value || !isExpiryDateValid) return; // Don't format if invalid
+    if (!value || !isExpiryDateValid) return;
 
     const regex = /^(?:(\d{1,2})[\s\/-]?)(\d{4})$|^(\d{4})[\s\/-]?(\d{1,2})$/;
     const match = value.match(regex);
@@ -216,7 +397,6 @@ const DrugFormModal: React.FC<{ drug: Drug | null; onClose: () => void; }> = ({ 
         const formattedDate = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
         setFormData(prev => ({ ...prev, expiryDate: formattedDate }));
         setIsExpiryDateValid(true);
-        return;
       }
     }
   };
@@ -230,58 +410,67 @@ const DrugFormModal: React.FC<{ drug: Drug | null; onClose: () => void; }> = ({ 
     e.preventDefault();
     
     if (!isExpiryDateValid) {
-        alert('فرمت تاریخ انقضا نامعتبر است. لطفاً آن را اصلاح کنید.');
+        showNotification('فرمت تاریخ انقضا نامعتبر است.', 'error');
         return;
     }
     
-    // Validate expiry date for new drugs
     if (!drug && formData.expiryDate) {
         const expiry = new Date(formData.expiryDate);
         const today = new Date();
         today.setHours(0, 0, 0, 0); 
         if (expiry < today) {
-            alert('تاریخ انقضا نمی‌تواند در گذشته باشد.');
+            showNotification('تاریخ انقضا نمی‌تواند در گذشته باشد.', 'error');
             return;
         }
     } else if (!drug && (!formData.lotNumber || !formData.expiryDate || formData.totalStock === '')) {
-        alert('لطفاً اطلاعات بچ اولیه (شماره لات، تاریخ انقضا، موجودی) را وارد کنید.');
+        showNotification('لطفاً اطلاعات بچ اولیه را وارد کنید.', 'error');
         return;
     }
     
-    if (drug && drug.id) { // --- EDITING LOGIC ---
-      const dataToUpdate: Partial<Drug> = {
-        name: formData.name,
-        company: formData.company,
-        salePrice: Number(formData.salePrice) || 0,
-        purchasePrice: Number(formData.purchasePrice) || 0,
-        type: formData.type,
-        barcode: formData.barcode,
-        internalBarcode: formData.internalBarcode,
-      };
-      await db.drugs.update(drug.id, dataToUpdate);
-    } else { // --- ADDING NEW DRUG LOGIC ---
-      await db.transaction('rw', db.drugs, db.drugBatches, async () => {
-        const drugToSave: Omit<Drug, 'id'> = {
+    try {
+      if (drug && drug.id) { // --- EDITING LOGIC ---
+        const dataToUpdate: Partial<Drug> = {
           name: formData.name,
           company: formData.company,
-          purchasePrice: Number(formData.purchasePrice) || 0,
           salePrice: Number(formData.salePrice) || 0,
-          totalStock: Number(formData.totalStock) || 0,
+          purchasePrice: Number(formData.purchasePrice) || 0,
           type: formData.type,
           barcode: formData.barcode,
           internalBarcode: formData.internalBarcode,
         };
-        const newDrugId = await db.drugs.add(drugToSave as Drug);
-        await db.drugBatches.add({
-          drugId: newDrugId,
-          lotNumber: formData.lotNumber,
-          expiryDate: formData.expiryDate,
-          quantityInStock: Number(formData.totalStock) || 0,
-          purchasePrice: Number(formData.purchasePrice) || 0,
+        const oldDrug = await db.drugs.get(drug.id);
+        await db.drugs.update(drug.id, dataToUpdate);
+        await logActivity('UPDATE', 'Drug', String(drug.id), { old: oldDrug, new: dataToUpdate });
+        showNotification('تغییرات با موفقیت ذخیره شد.', 'success');
+      } else { // --- ADDING NEW DRUG LOGIC ---
+        await db.transaction('rw', db.drugs, db.drugBatches, db.activityLog, async () => {
+          const drugToSave: Omit<Drug, 'id'> = {
+            name: formData.name,
+            company: formData.company,
+            purchasePrice: Number(formData.purchasePrice) || 0,
+            salePrice: Number(formData.salePrice) || 0,
+            totalStock: Number(formData.totalStock) || 0,
+            type: formData.type,
+            barcode: formData.barcode,
+            internalBarcode: formData.internalBarcode,
+          };
+          const newDrugId = await db.drugs.add(drugToSave as Drug) as number;
+          await db.drugBatches.add({
+            drugId: newDrugId,
+            lotNumber: formData.lotNumber,
+            expiryDate: formData.expiryDate,
+            quantityInStock: Number(formData.totalStock) || 0,
+            purchasePrice: Number(formData.purchasePrice) || 0,
+          });
+          await logActivity('CREATE', 'Drug', newDrugId, { newDrug: { ...drugToSave, id: newDrugId } });
         });
-      });
+        showNotification(`داروی "${formData.name}" با موفقیت اضافه شد.`, 'success');
+      }
+      onClose();
+    } catch (error) {
+       console.error("Failed to save drug:", error);
+       showNotification('خطا در ذخیره دارو.', 'error');
     }
-    onClose();
   };
   
   const isEditing = !!drug;
@@ -290,27 +479,27 @@ const DrugFormModal: React.FC<{ drug: Drug | null; onClose: () => void; }> = ({ 
     <Modal 
       title={isEditing ? 'ویرایش دارو' : 'افزودن داروی جدید'} 
       onClose={onClose}
-      headerContent={<HandwritingToggleButton />}
+      headerContent={<VoiceControlHeader {...voiceControls} />}
     >
       <form ref={formRef} onSubmit={handleSubmit} className="space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           <div className="lg:col-span-2">
-            <input name="name" value={formData.name} onChange={handleChange} placeholder="نام دارو (مثال: آموکسی سیلین 500mg)" required className="input-style" />
+            <input name="name" value={formData.name} onChange={handleChange} placeholder="نام دارو (مثال: Amoxicillin 500mg)" required className="input-style" autoFocus/>
           </div>
           <input name="company" value={formData.company} onChange={handleChange} placeholder="شرکت سازنده" required className="input-style" />
           <select name="type" value={formData.type} onChange={handleChange} className="input-style">
             {Object.values(DrugType).map(type => <option key={type} value={type}>{type}</option>)}
           </select>
-          <input name="purchasePrice" value={formData.purchasePrice} onChange={handleChange} type="number" step="0.01" placeholder="قیمت خرید پیش‌فرض" required className="input-style" />
-          <input name="salePrice" value={formData.salePrice} onChange={handleChange} type="number" step="0.01" placeholder="قیمت فروش" required className="input-style" />
+          <input name="purchasePrice" value={formData.purchasePrice} onChange={handleChange} type="text" placeholder="قیمت خرید پیش‌فرض" required className="input-style" />
+          <input name="salePrice" value={formData.salePrice} onChange={handleChange} type="text" placeholder="قیمت فروش" required className="input-style" />
           
            <div className="lg:col-span-3 border-t border-gray-600 pt-4 mt-2">
              <h3 className="text-sm font-semibold text-gray-400 mb-2">{isEditing ? 'کدهای شناسایی' : 'اطلاعات اولین بچ و موجودی اولیه'}</h3>
            </div>
           
           <input name="lotNumber" value={formData.lotNumber} onChange={handleChange} placeholder="شماره لات" required={!isEditing} disabled={isEditing} className={`input-style ${isEditing ? 'bg-gray-700' : ''}`} />
-          <input name="expiryDate" value={formData.expiryDate} onChange={handleChange} onBlur={handleExpiryDateBlur} type="text" placeholder="تاریخ انقضا (مثال: ۲۰۲۷-۱۲)" required={!isEditing} disabled={isEditing} className={`input-style ${isEditing ? 'bg-gray-700' : ''} ${!isExpiryDateValid ? '!border-red-500' : ''}`} />
-          <input name="totalStock" value={formData.totalStock} onChange={handleChange} type="number" placeholder="موجودی اولیه" required={!isEditing} disabled={isEditing} className={`input-style ${isEditing ? 'bg-gray-700' : ''}`} />
+          <input name="expiryDate" value={formData.expiryDate} onChange={handleChange} onBlur={handleExpiryDateBlur} type="text" placeholder="تاریخ انقضا (مثال: 2027-12)" required={!isEditing} disabled={isEditing} className={`input-style ${isEditing ? 'bg-gray-700' : ''} ${!isExpiryDateValid ? '!border-red-500' : ''}`} />
+          <input name="totalStock" value={formData.totalStock} onChange={handleChange} type="text" placeholder="موجودی اولیه" required={!isEditing} disabled={isEditing} className={`input-style ${isEditing ? 'bg-gray-700' : ''}`} />
           
           <div className="lg:col-span-3">
              <input name="barcode" value={formData.barcode} onChange={handleChange} placeholder="کد محصول (بارکد یا QR با اسکنر وارد شود)" className="input-style" />

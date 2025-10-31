@@ -57,18 +57,22 @@ export const HandwritingProvider: React.FC<{ children: ReactNode }> = ({ childre
   const strokePointsRef = useRef<{ x: number, y: number }[]>([]);
 
   useEffect(() => {
+    console.log("Checking for Handwriting API support...");
     if (navigator.handwriting) {
-      setIsSupported(true);
+      console.log("Handwriting API found. Attempting to create recognizer...");
+      setIsSupported(true); // Optimistically set to true
       navigator.handwriting.createRecognizer({ languages: ['fa', 'en'] })
         .then(recognizer => {
+          console.log("Handwriting recognizer created successfully.");
           recognizerRef.current = recognizer;
         })
         .catch(err => {
           console.error("Failed to create handwriting recognizer:", err);
-          setIsSupported(false);
+          console.log("Handwriting API was found, but recognizer creation failed. Disabling feature.");
+          setIsSupported(false); // Revert on failure
         });
     } else {
-      console.log("Web Handwriting API not supported in this browser.");
+      console.warn("Web Handwriting API not supported in this browser. To enable on Chrome, go to chrome://flags and enable #enable-experimental-web-platform-features, then relaunch.");
       setIsSupported(false);
     }
   }, []);
@@ -76,6 +80,11 @@ export const HandwritingProvider: React.FC<{ children: ReactNode }> = ({ childre
   const toggleHandwriting = useCallback(() => {
     if (isSupported) {
       setIsEnabled(prev => !prev);
+    } else {
+      alert(
+        'حالت نوشتاری در مرورگر شما پشتیبانی نمی‌شود یا فعال نیست.\n\n' +
+        'این یک ویژگی آزمایشی است. در مرورگر کروم، می‌توانید با مراجعه به آدرس chrome://flags و فعال کردن گزینه #enable-experimental-web-platform-features آن را امتحان کنید.'
+      );
     }
   }, [isSupported]);
   
@@ -162,7 +171,7 @@ export const HandwritingProvider: React.FC<{ children: ReactNode }> = ({ childre
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (canvas) {
+    if (isEnabled && canvas) {
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
       const ctx = canvas.getContext('2d');

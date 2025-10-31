@@ -5,12 +5,18 @@ import { Plus, Search, Trash2, X, Edit, Printer } from 'lucide-react';
 import Modal from '../components/Modal';
 import { PurchaseInvoice, PurchaseInvoiceItem, Supplier, Drug } from '../types';
 import PrintablePurchaseInvoice from '../components/PrintablePurchaseInvoice';
-import HandwritingToggleButton from '../components/HandwritingToggleButton';
+import { useVoiceInput } from '../hooks/useVoiceInput';
+import VoiceControlHeader from '../components/VoiceControlHeader';
+import { useAuth } from '../contexts/AuthContext';
+import { useNotification } from '../contexts/NotificationContext';
+import { logActivity } from '../lib/activityLogger';
 
 const Purchases: React.FC = () => {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editingInvoice, setEditingInvoice] = useState<PurchaseInvoice | null>(null);
     const [invoiceToPrint, setInvoiceToPrint] = useState<PurchaseInvoice | null>(null);
+    const { hasPermission } = useAuth();
+    
     const purchaseInvoices = useLiveQuery(() => db.purchaseInvoices.orderBy('date').reverse().toArray(), []);
     const suppliers = useLiveQuery(() => db.suppliers.toArray(), []);
 
@@ -22,13 +28,15 @@ const Purchases: React.FC = () => {
         <div className="space-y-6">
             <div className="flex justify-between items-center">
                 <h2 className="text-3xl font-bold text-white">مدیریت خریدها</h2>
-                <button
-                    onClick={() => setIsModalOpen(true)}
-                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-                >
-                    <Plus size={20} />
-                    <span>ثبت فاکتور جدید</span>
-                </button>
+                {hasPermission('purchases:create') && (
+                    <button
+                        onClick={() => setIsModalOpen(true)}
+                        className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                    >
+                        <Plus size={20} />
+                        <span>ثبت فاکتور جدید</span>
+                    </button>
+                )}
             </div>
             <div className="bg-gray-800 rounded-lg shadow-lg overflow-hidden border border-gray-700">
                 <table className="w-full text-sm text-right text-gray-300">
@@ -57,7 +65,9 @@ const Purchases: React.FC = () => {
                                 <td className="px-6 py-4">${invoice.totalAmount.toFixed(2)}</td>
                                 <td className="px-6 py-4 flex items-center gap-4">
                                     <button onClick={() => setInvoiceToPrint(invoice)} className="text-gray-400 hover:text-white" title="چاپ فاکتور"><Printer size={18} /></button>
-                                    <button onClick={() => setEditingInvoice(invoice)} className="text-blue-400 hover:text-blue-300" title="ویرایش فاکتور"><Edit size={18} /></button>
+                                    {hasPermission('purchases:edit') && (
+                                        <button onClick={() => setEditingInvoice(invoice)} className="text-blue-400 hover:text-blue-300" title="ویرایش فاکتور"><Edit size={18} /></button>
+                                    )}
                                 </td>
                             </tr>
                         ))}
@@ -154,6 +164,7 @@ const PurchaseFormModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
     const [items, setItems] = useState<PurchaseItemData[]>([]);
     const [searchTerm, setSearchTerm] = useState('');
+    const { showNotification } = useNotification();
 
     const suppliers = useLiveQuery(() => db.suppliers.orderBy('name').toArray(), []);
     const drugs = useLiveQuery(() => db.drugs.toArray(), []);
@@ -229,16 +240,48 @@ const PurchaseFormModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     const totalAmount = useMemo(() => {
         return items.reduce((sum, item) => sum + (Number(item.purchasePrice) || 0) * (Number(item.quantity) || 0), 0);
     }, [items]);
+    
+    const normalizeNumeric = (text: string) => {
+        const persianDigitsMap: { [key: string]: string } = { '۰': '0', '۱': '1', '۲': '2', '۳': '3', '۴': '4', '۵': '5', '۶': '6', '۷': '7', '۸': '8', '۹': '9' };
+        let normalized = text.replace(/ /g, '');
+        for (const key in persianDigitsMap) {
+            normalized = normalized.replace(new RegExp(key, 'g'), persianDigitsMap[key]);
+        }
+        return normalized;
+    };
+
+    const handleVoiceTranscript = (transcript: string) => {
+        const activeElement = document.activeElement as HTMLInputElement;
+        if (!activeElement) return;
+
+        const { index, field } = activeElement.dataset;
+        if (index && field) {
+            const value = (field === 'quantity' || field === 'purchasePrice' || field === 'lotNumber' || field === 'expiryDate')
+                ? normalizeNumeric(transcript)
+                : transcript;
+            updateItem(parseInt(index, 10), field as any, value);
+            return;
+        }
+
+        const { name } = activeElement;
+        if (name === 'invoiceNumber') {
+            setInvoiceNumber(normalizeNumeric(transcript));
+        } else if (name === 'searchTerm') {
+            setSearchTerm(transcript);
+        }
+    };
+
+    const voiceControls = useVoiceInput({ onTranscript: handleVoiceTranscript });
 
     const handleSubmit = async (e: FormEvent) => {
         e.preventDefault();
         if (!supplierId || items.length === 0 || !invoiceNumber) {
-            alert('لطفاً تمام اطلاعات فاکتور را تکمیل کنید.');
+            showNotification('لطفاً تمام اطلاعات فاکتور را تکمیل کنید.', 'error');
             return;
         }
         
         if (items.some(item => !item.isExpiryDateValid)) {
-            alert('فرمت تاریخ انقضا در یک یا چند قلم نامعتبر است. لطفاً آن را اصلاح کنید.');
+            showNotification('فرمت تاریخ انقضا در یک یا چند قلم نامعتبر است.', 'error');
             return;
         }
 
@@ -252,7 +295,7 @@ const PurchaseFormModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
         }));
 
         if (finalItems.some(item => item.quantity <= 0 || item.purchasePrice <= 0 || !item.lotNumber || !item.expiryDate)) {
-            alert('لطفاً تمام فیلدهای اقلام فاکتور (تعداد، قیمت، لات، انقضا) را به درستی وارد کنید.');
+            showNotification('لطفاً تمام فیلدهای اقلام فاکتور را به درستی وارد کنید.', 'error');
             return;
         }
 
@@ -266,8 +309,8 @@ const PurchaseFormModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
         };
 
         try {
-            await db.transaction('rw', db.purchaseInvoices, db.drugs, db.drugBatches, db.suppliers, async () => {
-                await db.purchaseInvoices.add(invoice);
+            await db.transaction('rw', db.purchaseInvoices, db.drugs, db.drugBatches, db.suppliers, db.activityLog, async () => {
+                const newInvoiceId = await db.purchaseInvoices.add(invoice);
 
                 for (const item of finalItems) {
                     const existingBatch = await db.drugBatches
@@ -296,28 +339,32 @@ const PurchaseFormModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                 await db.suppliers.where('id').equals(supplierId).modify(supplier => {
                     supplier.totalDebt += totalAmount;
                 });
+
+                await logActivity('CREATE', 'PurchaseInvoice', newInvoiceId, { invoice: { id: newInvoiceId, ...invoice } });
             });
+            showNotification('فاکتور خرید با موفقیت ثبت شد.', 'success');
             onClose();
         } catch (error) {
             console.error("Failed to save purchase invoice:", error);
-            alert("خطا در ثبت فاکتور. لطفاً دوباره تلاش کنید.");
+            showNotification('خطا در ثبت فاکتور. لطفاً دوباره تلاش کنید.', 'error');
         }
     };
 
     return (
-        <Modal title="ثبت فاکتور خرید جدید" onClose={onClose} headerContent={<HandwritingToggleButton />}>
+        <Modal title="ثبت فاکتور خرید جدید" onClose={onClose} headerContent={<VoiceControlHeader {...voiceControls} />}>
             <form onSubmit={handleSubmit} className="space-y-4">
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 bg-gray-700/50 rounded-lg">
                     <select value={supplierId ?? ''} onChange={e => setSupplierId(Number(e.target.value))} required className="input-style">
                         <option value="" disabled>-- انتخاب تامین‌کننده --</option>
                         {suppliers?.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                     </select>
-                    <input type="text" value={invoiceNumber} onChange={e => setInvoiceNumber(e.target.value)} placeholder="شماره فاکتور" required className="input-style" />
+                    <input name="invoiceNumber" type="text" value={invoiceNumber} onChange={e => setInvoiceNumber(e.target.value)} placeholder="شماره فاکتور" required className="input-style" />
                     <input type="date" value={date} onChange={e => setDate(e.target.value)} required className="input-style" />
                 </div>
                 <div className="relative">
                     <Search className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                     <input
+                        name="searchTerm"
                         type="text"
                         placeholder="جستجوی دارو برای افزودن به فاکتور..."
                         className="w-full bg-gray-700 border border-gray-600 rounded-lg py-2 pr-10 pl-4 text-white focus:outline-none focus:border-blue-500"
@@ -338,10 +385,10 @@ const PurchaseFormModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                     {items.map((item, index) => (
                         <div key={item.drugId} className="grid grid-cols-12 gap-2 items-center bg-gray-700/50 p-2 rounded-md">
                             <span className="col-span-3 text-sm truncate">{item.name}</span>
-                            <input type="number" value={item.quantity} onChange={e => updateItem(index, 'quantity', e.target.value)} placeholder="تعداد" className="input-style-small col-span-2" />
-                            <input type="number" step="0.01" value={item.purchasePrice} onChange={e => updateItem(index, 'purchasePrice', e.target.value)} placeholder="قیمت خرید" className="input-style-small col-span-2" />
-                            <input type="text" value={item.lotNumber} onChange={e => updateItem(index, 'lotNumber', e.target.value)} placeholder="شماره لات" className="input-style-small col-span-2" />
-                            <input type="text" value={item.expiryDate} onChange={e => updateItem(index, 'expiryDate', e.target.value)} onBlur={e => handleExpiryDateBlur(index, e.target.value)} placeholder="انقضا (مثال: ۱۲-۲۰۲۷)" className={`input-style-small col-span-2 ${!item.isExpiryDateValid ? '!border-red-500' : ''}`} />
+                            <input data-index={index} data-field="quantity" type="number" value={item.quantity} onChange={e => updateItem(index, 'quantity', e.target.value)} placeholder="تعداد" className="input-style-small col-span-2" />
+                            <input data-index={index} data-field="purchasePrice" type="number" step="0.01" value={item.purchasePrice} onChange={e => updateItem(index, 'purchasePrice', e.target.value)} placeholder="قیمت خرید" className="input-style-small col-span-2" />
+                            <input data-index={index} data-field="lotNumber" type="text" value={item.lotNumber} onChange={e => updateItem(index, 'lotNumber', e.target.value)} placeholder="شماره لات" className="input-style-small col-span-2" />
+                            <input data-index={index} data-field="expiryDate" type="text" value={item.expiryDate} onChange={e => updateItem(index, 'expiryDate', e.target.value)} onBlur={e => handleExpiryDateBlur(index, e.target.value)} placeholder="انقضا (مثال: ۱۲-۲۰۲۷)" className={`input-style-small col-span-2 ${!item.isExpiryDateValid ? '!border-red-500' : ''}`} />
                             <button type="button" onClick={() => removeItem(index)} className="text-red-400 hover:text-red-300 col-span-1 flex justify-center"><Trash2 size={16} /></button>
                         </div>
                     ))}
@@ -371,6 +418,7 @@ const EditPurchaseInvoiceModal: React.FC<{ invoice: PurchaseInvoice; onClose: ()
     const [invoiceNumber, setInvoiceNumber] = useState(invoice.invoiceNumber);
     const [date, setDate] = useState(invoice.date.split('T')[0]);
     const [items, setItems] = useState<PurchaseItemData[]>(invoice.items.map(i => ({...i, quantity: i.quantity, purchasePrice: i.purchasePrice, isExpiryDateValid: true})));
+    const { showNotification } = useNotification();
     
     // The rest of the state and logic for add/remove/update items
     const [searchTerm, setSearchTerm] = useState('');
@@ -432,12 +480,44 @@ const EditPurchaseInvoiceModal: React.FC<{ invoice: PurchaseInvoice; onClose: ()
     const totalAmount = useMemo(() => {
         return items.reduce((sum, item) => sum + (Number(item.purchasePrice) || 0) * (Number(item.quantity) || 0), 0);
     }, [items]);
+    
+    const normalizeNumeric = (text: string) => {
+        const persianDigitsMap: { [key: string]: string } = { '۰': '0', '۱': '1', '۲': '2', '۳': '3', '۴': '4', '۵': '5', '۶': '6', '۷': '7', '۸': '8', '۹': '9' };
+        let normalized = text.replace(/ /g, '');
+        for (const key in persianDigitsMap) {
+            normalized = normalized.replace(new RegExp(key, 'g'), persianDigitsMap[key]);
+        }
+        return normalized;
+    };
+
+    const handleVoiceTranscript = (transcript: string) => {
+        const activeElement = document.activeElement as HTMLInputElement;
+        if (!activeElement) return;
+
+        const { index, field } = activeElement.dataset;
+        if (index && field) {
+            const value = (field === 'quantity' || field === 'purchasePrice' || field === 'lotNumber' || field === 'expiryDate')
+                ? normalizeNumeric(transcript)
+                : transcript;
+            updateItem(parseInt(index, 10), field as any, value);
+            return;
+        }
+
+        const { name } = activeElement;
+        if (name === 'invoiceNumber') {
+            setInvoiceNumber(normalizeNumeric(transcript));
+        } else if (name === 'searchTerm') {
+            setSearchTerm(transcript);
+        }
+    };
+
+    const voiceControls = useVoiceInput({ onTranscript: handleVoiceTranscript });
 
     const handleUpdate = async (e: FormEvent) => {
         e.preventDefault();
         
         if (items.some(item => !item.isExpiryDateValid)) {
-            alert('فرمت تاریخ انقضا در یک یا چند قلم نامعتبر است. لطفاً آن را اصلاح کنید.');
+            showNotification('فرمت تاریخ انقضا در یک یا چند قلم نامعتبر است.', 'error');
             return;
         }
 
@@ -451,12 +531,12 @@ const EditPurchaseInvoiceModal: React.FC<{ invoice: PurchaseInvoice; onClose: ()
         }));
 
         if (finalItems.some(item => item.quantity <= 0 || item.purchasePrice < 0 || !item.lotNumber || !item.expiryDate)) {
-             alert('لطفاً تمام فیلدهای اقلام فاکتور (تعداد، قیمت، لات، انقضا) را به درستی وارد کنید.');
+             showNotification('لطفاً تمام فیلدهای اقلام فاکتور را به درستی وارد کنید.', 'error');
             return;
         }
 
         try {
-            await db.transaction('rw', db.purchaseInvoices, db.drugs, db.drugBatches, db.suppliers, async () => {
+            await db.transaction('rw', db.purchaseInvoices, db.drugs, db.drugBatches, db.suppliers, db.activityLog, async () => {
                 const originalInvoice = await db.purchaseInvoices.get(invoice.id!);
                 if (!originalInvoice) throw new Error("Invoice not found");
 
@@ -486,23 +566,27 @@ const EditPurchaseInvoiceModal: React.FC<{ invoice: PurchaseInvoice; onClose: ()
                 await db.suppliers.where('id').equals(supplierId).modify(supplier => { supplier.totalDebt += totalAmount; });
 
                 // --- 3. Update the invoice record ---
-                await db.purchaseInvoices.update(invoice.id!, {
+                const updatedInvoiceData = {
                     invoiceNumber,
                     supplierId,
                     date,
                     items: finalItems,
                     totalAmount,
-                });
+                };
+                await db.purchaseInvoices.update(invoice.id!, updatedInvoiceData);
+
+                await logActivity('UPDATE', 'PurchaseInvoice', invoice.id!, { old: originalInvoice, new: { ...invoice, ...updatedInvoiceData } });
             });
+            showNotification('فاکتور با موفقیت ویرایش شد.', 'success');
             onSave();
         } catch (error) {
             console.error("Failed to update invoice:", error);
-            alert(`خطا در ویرایش فاکتور: ${error}`);
+            showNotification(`خطا در ویرایش فاکتور: ${error}`, 'error');
         }
     };
 
     return (
-        <Modal title={`ویرایش فاکتور خرید #${invoice.invoiceNumber}`} onClose={onClose} headerContent={<HandwritingToggleButton />}>
+        <Modal title={`ویرایش فاکتور خرید #${invoice.invoiceNumber}`} onClose={onClose} headerContent={<VoiceControlHeader {...voiceControls} />}>
             <form onSubmit={handleUpdate} className="space-y-4">
                  {/* Reusing the same form structure as PurchaseFormModal */}
                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 bg-gray-700/50 rounded-lg">
@@ -510,13 +594,13 @@ const EditPurchaseInvoiceModal: React.FC<{ invoice: PurchaseInvoice; onClose: ()
                         <option value="" disabled>-- انتخاب تامین‌کننده --</option>
                         {suppliers?.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                     </select>
-                    <input type="text" value={invoiceNumber} onChange={e => setInvoiceNumber(e.target.value)} placeholder="شماره فاکتور" required className="input-style" />
+                    <input name="invoiceNumber" type="text" value={invoiceNumber} onChange={e => setInvoiceNumber(e.target.value)} placeholder="شماره فاکتور" required className="input-style" />
                     <input type="date" value={date} onChange={e => setDate(e.target.value)} required className="input-style" />
                 </div>
                 {/* Search and item list sections are identical to PurchaseFormModal */}
                  <div className="relative">
                     <Search className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-                    <input type="text" placeholder="جستجوی دارو برای افزودن..." className="w-full bg-gray-700 border border-gray-600 rounded-lg py-2 pr-10 pl-4" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+                    <input name="searchTerm" type="text" placeholder="جستجوی دارو برای افزودن..." className="w-full bg-gray-700 border border-gray-600 rounded-lg py-2 pr-10 pl-4" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
                     {searchResults.length > 0 && (
                         <div className="absolute z-10 w-full mt-1 bg-gray-600 border border-gray-500 rounded-lg shadow-lg">
                             {searchResults.map(drug => <div key={drug.id} onClick={() => addItem(drug)} className="p-3 cursor-pointer hover:bg-blue-500">{drug.name}</div>)}
@@ -527,10 +611,10 @@ const EditPurchaseInvoiceModal: React.FC<{ invoice: PurchaseInvoice; onClose: ()
                     {items.map((item, index) => (
                          <div key={index} className="grid grid-cols-12 gap-2 items-center bg-gray-700/50 p-2 rounded-md">
                             <span className="col-span-3 text-sm truncate">{item.name}</span>
-                            <input type="number" value={item.quantity} onChange={e => updateItem(index, 'quantity', e.target.value)} placeholder="تعداد" className="input-style-small col-span-2" />
-                            <input type="number" step="0.01" value={item.purchasePrice} onChange={e => updateItem(index, 'purchasePrice', e.target.value)} placeholder="قیمت خرید" className="input-style-small col-span-2" />
-                            <input type="text" value={item.lotNumber} onChange={e => updateItem(index, 'lotNumber', e.target.value)} placeholder="شماره لات" className="input-style-small col-span-2" />
-                            <input type="text" value={item.expiryDate} onChange={e => updateItem(index, 'expiryDate', e.target.value)} onBlur={e => handleExpiryDateBlur(index, e.target.value)} placeholder="انقضا" className={`input-style-small col-span-2 ${!item.isExpiryDateValid ? '!border-red-500' : ''}`} />
+                            <input data-index={index} data-field="quantity" type="number" value={item.quantity} onChange={e => updateItem(index, 'quantity', e.target.value)} placeholder="تعداد" className="input-style-small col-span-2" />
+                            <input data-index={index} data-field="purchasePrice" type="number" step="0.01" value={item.purchasePrice} onChange={e => updateItem(index, 'purchasePrice', e.target.value)} placeholder="قیمت خرید" className="input-style-small col-span-2" />
+                            <input data-index={index} data-field="lotNumber" type="text" value={item.lotNumber} onChange={e => updateItem(index, 'lotNumber', e.target.value)} placeholder="شماره لات" className="input-style-small col-span-2" />
+                            <input data-index={index} data-field="expiryDate" type="text" value={item.expiryDate} onChange={e => updateItem(index, 'expiryDate', e.target.value)} onBlur={e => handleExpiryDateBlur(index, e.target.value)} placeholder="انقضا" className={`input-style-small col-span-2 ${!item.isExpiryDateValid ? '!border-red-500' : ''}`} />
                             <button type="button" onClick={() => removeItem(index)} className="text-red-400 hover:text-red-300 col-span-1 flex justify-center"><Trash2 size={16} /></button>
                         </div>
                     ))}

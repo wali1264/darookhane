@@ -1,5 +1,5 @@
 {
-  "name": "copy-of-copy-of-copy-of-copy-of-copy-of-ai-(pharma-pal)",
+  "name": "copy-of-copy-of-copy-of-copy-of-copy-of-copy-of-copy-of-copy-of-copy-of-copy-of-copy-of-copy-of-copy-of-copy-of-copy-of-copy-of-copy-of-copy-of-copy-of-copy-of-ok-ai-(pharma-pal)",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -14,7 +14,8 @@
     "lucide-react": "^0.548.0",
     "dexie": "^4.0.7",
     "dexie-react-hooks": "^1.1.7",
-    "@google/genai": "^1.28.0"
+    "@google/genai": "^1.28.0",
+    "@supabase/supabase-js": "^2.45.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",

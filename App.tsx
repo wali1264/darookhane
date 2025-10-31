@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import Dashboard from './pages/Dashboard';
 import Inventory from './pages/Inventory';
@@ -6,19 +6,16 @@ import Sales from './pages/Sales';
 import Purchases from './pages/Purchases';
 import Accounting from './pages/Accounting';
 import Settings from './pages/Settings';
+import Login from './pages/Login';
+import SupplierPortal from './pages/SupplierPortal';
 import { Page } from './types';
 import Header from './components/Header';
 import AIAssistant from './components/AIAssistant';
-import Notification from './components/Notification';
-import { HandwritingProvider } from './components/HandwritingProvider';
+import { useAuth } from './contexts/AuthContext';
+import { Dna } from 'lucide-react';
+import { useOnlineStatus } from './hooks/useOnlineStatus';
+import { processSyncQueue } from './lib/syncService';
 
-type NotificationType = 'success' | 'error' | 'info';
-
-interface NotificationState {
-  message: string;
-  type: NotificationType;
-  id: number;
-}
 
 const pageTitles: Record<Page, string> = {
   Dashboard: 'داشبورد',
@@ -29,18 +26,8 @@ const pageTitles: Record<Page, string> = {
   Settings: 'تنظیمات',
 };
 
-const App: React.FC = () => {
+const MainApp: React.FC = () => {
   const [activePage, setActivePage] = useState<Page>('Dashboard');
-  const [notification, setNotification] = useState<NotificationState | null>(null);
-
-  const showNotification = useCallback((message: string, type: NotificationType = 'info') => {
-    const newNotification = { message, type, id: Date.now() };
-    setNotification(newNotification);
-    setTimeout(() => {
-        setNotification((current) => (current?.id === newNotification.id ? null : current));
-    }, 4000);
-  }, []);
-
 
   const renderPage = useCallback(() => {
     switch (activePage) {
@@ -62,26 +49,64 @@ const App: React.FC = () => {
   }, [activePage]);
 
   return (
-    <HandwritingProvider>
-      <div className="flex h-screen bg-gray-900 text-gray-100">
-        <Sidebar activePage={activePage} setActivePage={setActivePage} />
-        <div className="flex-1 flex flex-col overflow-hidden">
-          <Header currentPageTitle={pageTitles[activePage]} />
-          <main className="flex-1 overflow-x-hidden overflow-y-auto bg-gray-900 p-4 sm:p-6 lg:p-8">
-            {renderPage()}
-          </main>
-        </div>
-         {notification && (
-          <Notification
-            message={notification.message}
-            type={notification.type}
-            onClose={() => setNotification(null)}
-          />
-        )}
-        <AIAssistant showNotification={showNotification} />
+    <div className="flex h-screen bg-gray-900 text-gray-100">
+      <Sidebar activePage={activePage} setActivePage={setActivePage} />
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <Header currentPageTitle={pageTitles[activePage]} />
+        <main className="flex-1 overflow-x-hidden overflow-y-auto bg-gray-900 p-4 sm:p-6 lg:p-8">
+          {renderPage()}
+        </main>
       </div>
-    </HandwritingProvider>
+      <AIAssistant />
+    </div>
   );
+};
+
+const AppContent: React.FC = () => {
+  const { currentUser, isLoading } = useAuth();
+  const isOnline = useOnlineStatus();
+
+  // Effect to trigger sync queue processing
+  useEffect(() => {
+    if (isOnline && currentUser) {
+        // Trigger sync when online status changes to true or when user logs in
+        console.log("App is online and user is logged in. Processing sync queue...");
+        processSyncQueue();
+    }
+  }, [isOnline, currentUser]);
+
+  // Periodic sync check
+  useEffect(() => {
+    const interval = setInterval(() => {
+        if (navigator.onLine && currentUser) {
+            processSyncQueue();
+        }
+    }, 60000); // Sync every 60 seconds
+    return () => clearInterval(interval);
+  }, [currentUser]);
+
+
+  if (isLoading) {
+    return (
+      <div className="flex h-screen w-full items-center justify-center bg-gray-900">
+        <div className="flex flex-col items-center gap-4">
+          <Dna size={48} className="text-blue-400 animate-spin" />
+          <p className="text-lg text-gray-300">بارگذاری...</p>
+        </div>
+      </div>
+    );
+  }
+  if (!currentUser) {
+    return <Login />;
+  }
+  if (currentUser.type === 'supplier') {
+      return <SupplierPortal />;
+  }
+  return <MainApp />;
+};
+
+const App: React.FC = () => {
+  return <AppContent />;
 };
 
 export default App;

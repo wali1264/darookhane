@@ -2,6 +2,7 @@ import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { GoogleGenAI, GenerateContentResponse, Chat, LiveSession, LiveServerMessage, Modality, Blob } from '@google/genai';
 import { Bot, Mic, Pen, X, Minus, ChevronsUpDown, Send, Sparkles, Wifi, Square } from 'lucide-react';
 import { toolDeclarations, executeTool } from '../lib/ai-tools';
+import { useNotification } from '../contexts/NotificationContext';
 
 type AssistantMode = 'text' | null;
 type Message = {
@@ -9,11 +10,6 @@ type Message = {
     text: string;
 };
 type VoiceStatus = 'idle' | 'listening' | 'processing' | 'speaking' | 'reconnecting';
-type NotificationType = 'success' | 'error' | 'info';
-
-interface AIAssistantProps {
-  showNotification: (message: string, type: NotificationType) => void;
-}
 
 // ===================================================================================
 // Audio Helper Functions
@@ -89,7 +85,8 @@ Core Directives:
 8.  **PERSIAN ONLY:** All interactions must be in Persian.`;
 
 
-const AIAssistant: React.FC<AIAssistantProps> = ({ showNotification }) => {
+const AIAssistant: React.FC = () => {
+  const { showNotification } = useNotification();
   const [isFabOpen, setIsFabOpen] = useState(false);
   const [activeMode, setActiveMode] = useState<AssistantMode>(null);
   const [isMinimized, setIsMinimized] = useState(false);

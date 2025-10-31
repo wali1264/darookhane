@@ -6,16 +6,28 @@ import { Search, X, Plus, Minus, Printer, Edit, History } from 'lucide-react';
 import Modal from '../components/Modal';
 import PrintableInvoice from '../components/PrintableInvoice';
 import Dexie from 'dexie';
-import HandwritingToggleButton from '../components/HandwritingToggleButton';
+import { useVoiceInput } from '../hooks/useVoiceInput';
+import VoiceControlHeader from '../components/VoiceControlHeader';
+import { useAuth } from '../contexts/AuthContext';
+import { useNotification } from '../contexts/NotificationContext';
+import { logActivity } from '../lib/activityLogger';
 
 const Sales: React.FC = () => {
     const [searchTerm, setSearchTerm] = useState('');
     const [cart, setCart] = useState<Omit<SaleItem, 'deductions'>[]>([]);
     const [invoiceToPrint, setInvoiceToPrint] = useState<SaleInvoice | null>(null);
     const [editingInvoice, setEditingInvoice] = useState<SaleInvoice | null>(null);
+    const { hasPermission } = useAuth();
+    const { showNotification } = useNotification();
 
     const drugs = useLiveQuery(() => db.drugs.toArray(), []);
     const recentInvoices = useLiveQuery(() => db.saleInvoices.orderBy('id').reverse().limit(5).toArray(), []);
+
+    const handleVoiceTranscript = (transcript: string) => {
+        setSearchTerm(transcript);
+    };
+
+    const voiceControls = useVoiceInput({ onTranscript: handleVoiceTranscript });
 
     const filteredDrugs = useMemo(() => {
         if (!searchTerm) return [];
@@ -80,7 +92,7 @@ const Sales: React.FC = () => {
         if (cart.length === 0) return;
 
         try {
-            const invoiceId = await db.transaction('rw', db.saleInvoices, db.drugs, db.drugBatches, async () => {
+            const invoiceId = await db.transaction('rw', db.saleInvoices, db.drugs, db.drugBatches, db.activityLog, async () => {
                 const itemsWithDeductions: SaleItem[] = [];
 
                 for (const item of cart) {
@@ -119,16 +131,19 @@ const Sales: React.FC = () => {
                     totalAmount: totalAmount,
                 };
                 
-                return await db.saleInvoices.add(invoice as SaleInvoice);
+                const newInvoiceId = await db.saleInvoices.add(invoice as SaleInvoice);
+                await logActivity('CREATE', 'SaleInvoice', newInvoiceId, { invoice: { ...invoice, id: newInvoiceId } });
+                return newInvoiceId;
             });
 
             const finalInvoice = await db.saleInvoices.get(invoiceId);
             setInvoiceToPrint(finalInvoice!);
             setCart([]);
+            showNotification('فاکتور با موفقیت ثبت شد.', 'success');
 
         } catch (error) {
             console.error("Failed to process sale:", error);
-            alert("خطا در پردازش فروش. موجودی انبار ممکن است کافی نباشد.");
+            showNotification('خطا در پردازش فروش. موجودی انبار ممکن است کافی نباشد.', 'error');
         }
     };
     
@@ -145,14 +160,13 @@ const Sales: React.FC = () => {
                         <Search className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
                         <input
                             type="text"
+                            name="drugSearchInput"
                             placeholder="جستجوی دارو بر اساس نام یا بارکد..."
-                            className="w-full bg-gray-700/50 border border-gray-600 rounded-lg py-2 pr-10 pl-12 text-white focus:outline-none focus:border-blue-500"
+                            className="w-full bg-gray-700/50 border border-gray-600 rounded-lg py-2 pr-10 pl-4 text-white focus:outline-none focus:border-blue-500"
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
+                            autoFocus
                         />
-                         <div className="absolute left-2 top-1/2 -translate-y-1/2">
-                            <HandwritingToggleButton />
-                        </div>
                     </div>
                     <div className="flex-grow space-y-2 overflow-y-auto">
                         {filteredDrugs.map(drug => (
@@ -184,10 +198,12 @@ const Sales: React.FC = () => {
                                         <Printer size={14} />
                                         <span>چاپ</span>
                                     </button>
-                                    <button onClick={() => handleOpenEditModal(inv)} className="flex items-center gap-2 text-sm px-3 py-1.5 bg-blue-600 text-white rounded-md hover:bg-blue-700">
-                                        <Edit size={14} />
-                                        <span>ویرایش</span>
-                                    </button>
+                                    {hasPermission('sales:edit') && (
+                                        <button onClick={() => handleOpenEditModal(inv)} className="flex items-center gap-2 text-sm px-3 py-1.5 bg-blue-600 text-white rounded-md hover:bg-blue-700">
+                                            <Edit size={14} />
+                                            <span>ویرایش</span>
+                                        </button>
+                                    )}
                                 </div>
                             </div>
                         ))}
@@ -197,7 +213,10 @@ const Sales: React.FC = () => {
 
             {/* Cart */}
             <div className="bg-gray-800 p-6 rounded-lg border border-gray-700 flex flex-col">
-                <h3 className="text-xl font-bold mb-4 text-white border-b border-gray-600 pb-3">سبد خرید</h3>
+                <div className="flex justify-between items-center mb-4 border-b border-gray-600 pb-3">
+                    <h3 className="text-xl font-bold text-white">سبد خرید</h3>
+                    <VoiceControlHeader {...voiceControls} />
+                </div>
                 <div className="flex-grow space-y-3 overflow-y-auto pr-2 -mr-2">
                     {cart.length === 0 && <p className="text-gray-500 text-center mt-8">سبد خرید خالی است.</p>}
                     {cart.map(item => (
@@ -224,7 +243,8 @@ const Sales: React.FC = () => {
                     </div>
                     <button
                         onClick={handleCheckout}
-                        disabled={cart.length === 0}
+                        disabled={cart.length === 0 || !hasPermission('sales:create')}
+                        title={!hasPermission('sales:create') ? "شما دسترسی لازم برای ثبت فاکتور را ندارید." : ""}
                         className="w-full py-3 bg-green-600 text-white font-bold rounded-lg hover:bg-green-700 disabled:bg-gray-500 disabled:cursor-not-allowed transition-colors">
                         ثبت فاکتور
                     </button>
@@ -239,7 +259,7 @@ const Sales: React.FC = () => {
                     onClose={() => setEditingInvoice(null)} 
                     onSave={() => {
                         setEditingInvoice(null);
-                        // Potentially show a success message
+                        showNotification('فاکتور با موفقیت ویرایش شد.', 'success');
                     }}
                 />
             )}
@@ -279,6 +299,7 @@ const InvoiceModal: React.FC<{invoice: SaleInvoice, onClose: () => void}> = ({in
 const EditInvoiceModal: React.FC<{ invoice: SaleInvoice; onClose: () => void; onSave: () => void; }> = ({ invoice, onClose, onSave }) => {
     const [items, setItems] = useState(invoice.items);
     const drugs = useLiveQuery(() => db.drugs.toArray(), []);
+    const { showNotification } = useNotification();
 
     const updateQuantity = (drugId: number, quantity: number) => {
         const drugInStock = drugs?.find(d => d.id === drugId);
@@ -307,11 +328,10 @@ const EditInvoiceModal: React.FC<{ invoice: SaleInvoice; onClose: () => void; on
 
     const handleUpdate = async () => {
          try {
-            await db.transaction('rw', db.saleInvoices, db.drugs, db.drugBatches, async () => {
+            await db.transaction('rw', db.saleInvoices, db.drugs, db.drugBatches, db.activityLog, async () => {
                 // Step 1: Revert the original sale (return all stock)
                 for (const originalItem of invoice.items) {
                     for (const deduction of originalItem.deductions) {
-                        // FIX: Property 'fn' does not exist on type 'DexieConstructor'. Use `modify` for atomic updates.
                         await db.drugBatches.where('id').equals(deduction.batchId).modify(batch => { batch.quantityInStock += deduction.quantity });
                     }
                     await db.drugs.where('id').equals(originalItem.drugId).modify(drug => {
@@ -345,15 +365,18 @@ const EditInvoiceModal: React.FC<{ invoice: SaleInvoice; onClose: () => void; on
                 }
 
                 // Step 3: Update the invoice record
-                await db.saleInvoices.update(invoice.id!, {
+                const updatedInvoiceData = {
                     items: newItemsWithDeductions,
                     totalAmount: totalAmount,
-                });
+                };
+                await db.saleInvoices.update(invoice.id!, updatedInvoiceData);
+                
+                await logActivity('UPDATE', 'SaleInvoice', invoice.id!, { old: invoice, new: { ...invoice, ...updatedInvoiceData } });
             });
             onSave();
         } catch (error) {
             console.error("Failed to update invoice:", error);
-            alert("خطا در ویرایش فاکتور. موجودی انبار ممکن است کافی نباشد.");
+            showNotification('خطا در ویرایش فاکتور. موجودی انبار ممکن است کافی نباشد.', 'error');
         }
     };
 
