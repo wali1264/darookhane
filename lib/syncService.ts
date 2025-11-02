@@ -115,7 +115,7 @@ async function syncItem(item: SyncQueueItem) {
 }
 
 export async function processSyncQueue() {
-    if (isSyncing || !navigator.onLine) {
+    if (isSyncing) {
         return;
     }
     isSyncing = true;
