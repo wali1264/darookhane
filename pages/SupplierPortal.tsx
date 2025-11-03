@@ -139,9 +139,9 @@ const SupplierPortal: React.FC = () => {
   const { currentUser } = useAuth();
   
   const supplier = useLiveQuery(
-    // FIX: Correctly access supplierId after type change in AuthContext.
-    () => currentUser?.type === 'supplier' ? db.suppliers.get(currentUser.supplierId) : Promise.resolve(undefined),
-    [currentUser?.type === 'supplier' ? currentUser.supplierId : undefined]
+    // Added a check to ensure currentUser is of type 'supplier' before accessing supplierId.
+    () => (currentUser?.type === 'supplier' ? db.suppliers.where('remoteId').equals(currentUser.supplierId).first() : Promise.resolve(undefined)),
+    [currentUser]
   );
   
   const renderContent = () => {

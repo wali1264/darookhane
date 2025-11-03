@@ -6,6 +6,7 @@ import Modal from './Modal';
 import { supabase } from '../lib/supabaseClient';
 import { useNotification } from '../contexts/NotificationContext';
 import { logActivity } from '../lib/activityLogger';
+import SyncStatus from './SyncStatus';
 
 
 const MyProfileModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
@@ -129,6 +130,7 @@ const Header: React.FC<HeaderProps> = ({ currentPageTitle }) => {
             <header className="bg-gray-800 shadow-md p-4 flex justify-between items-center border-b border-gray-700">
                 <h1 className="text-2xl font-bold text-white">{currentPageTitle}</h1>
                 <div className="flex items-center space-x-4">
+                    <SyncStatus />
                     <div 
                         className={`flex items-center space-x-2 px-3 py-1.5 rounded-full text-sm font-medium ${
                             isOnline ? 'bg-green-500/20 text-green-300' : 'bg-red-500/20 text-red-300'

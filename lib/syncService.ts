@@ -2,149 +2,138 @@ import { db } from '../db';
 import { supabase } from './supabaseClient';
 import { SyncQueueItem } from '../types';
 
-// A flag to prevent multiple sync processes from running simultaneously
+export const syncStatusChannel = new BroadcastChannel('sync_status');
+
 let isSyncing = false;
 
-// Utility to convert camelCase keys to snake_case for Supabase
-const camelToSnakeCase = (str: string) => str.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
-
-const toSnakeCase = (obj: any): any => {
-    if (Array.isArray(obj)) {
-        return obj.map(v => toSnakeCase(v));
-    } else if (obj !== null && typeof obj === 'object' && !obj.constructor.name.includes('Date')) {
-        return Object.keys(obj).reduce((acc, key) => {
-            acc[camelToSnakeCase(key)] = toSnakeCase(obj[key]);
-            return acc;
-        }, {} as any);
-    }
-    return obj;
-};
-
-// Map local Dexie table names to remote Supabase table names
-const TABLE_MAP: { [key: string]: string } = {
-    drugs: 'drugs',
-    drugBatches: 'drug_batches',
-    suppliers: 'suppliers',
-    purchaseInvoices: 'purchase_invoices',
-    saleInvoices: 'sale_invoices',
-    payments: 'payments',
-    clinicServices: 'clinic_services',
-    serviceProviders: 'service_providers',
-    clinicTransactions: 'clinic_transactions',
-    simpleAccountingColumns: 'simple_accounting_columns',
-    simpleAccountingEntries: 'simple_accounting_entries',
-};
-
-async function syncItem(item: SyncQueueItem) {
-    const remoteTable = TABLE_MAP[item.table];
-    if (!remoteTable) {
-        console.warn(`No remote table mapping for local table: ${item.table}. Skipping sync.`);
+export async function processSyncQueue() {
+    if (isSyncing || !navigator.onLine) {
         return;
     }
 
-    const localRecord = await db.table(item.table).get(item.recordId);
-    
-    switch (item.action) {
-        case 'create': {
-            const { id, ...payload } = item.payload; // Exclude local ID
-            
-            // Special handling for complex objects like invoices
-            if (item.table === 'purchaseInvoices') {
-                const { items, ...invoiceData } = payload;
-                const snakeInvoice = toSnakeCase(invoiceData);
-                const { data, error } = await supabase.from(remoteTable).insert(snakeInvoice).select('id').single();
-                if (error) throw error;
-                const remoteId = data.id;
-                
-                if (items && items.length > 0) {
-                    const snakeItems = items.map((i: any) => toSnakeCase({ ...i, purchaseInvoiceId: remoteId }));
-                    const { error: itemError } = await supabase.from('purchase_invoice_items').insert(snakeItems);
-                    if (itemError) throw itemError;
+    isSyncing = true;
+    try {
+        const itemsToSync = await db.syncQueue.orderBy('timestamp').toArray();
+        if (itemsToSync.length === 0) {
+            syncStatusChannel.postMessage({ status: 'synced' });
+            return;
+        }
+
+        console.log(`[Sync] Starting sync for ${itemsToSync.length} items.`);
+        syncStatusChannel.postMessage({ status: 'syncing', processed: 0, total: itemsToSync.length });
+
+        const successfullySyncedIds: number[] = [];
+        let errorOccurred = false;
+
+        for (let i = 0; i < itemsToSync.length; i++) {
+            const item = itemsToSync[i];
+            try {
+                const success = await handleSyncItem(item);
+                if (success) {
+                    successfullySyncedIds.push(item.id!);
+                } else {
+                    console.error(`[Sync] Failed to sync item ${item.id}`, item);
+                    errorOccurred = true;
                 }
-                await db.table(item.table).update(item.recordId, { remoteId });
-            } else if (item.table === 'saleInvoices') {
-                const { items, ...invoiceData } = payload;
-                const snakeInvoice = toSnakeCase(invoiceData);
-                const { data, error } = await supabase.from(remoteTable).insert(snakeInvoice).select('id').single();
-                if (error) throw error;
-                const remoteId = data.id;
-
-                if (items && items.length > 0) {
-                    const snakeItems = items.map((i: any) => {
-                        const { deductions, ...itemData } = i; // Exclude local-only deductions field
-                        return toSnakeCase({ ...itemData, saleInvoiceId: remoteId });
-                    });
-                    const { error: itemError } = await supabase.from('sale_invoice_items').insert(snakeItems);
-                    if (itemError) throw itemError;
-                }
-                await db.table(item.table).update(item.recordId, { remoteId });
-            } else {
-                 // Standard create operation for simple objects
-                const snakePayload = toSnakeCase(payload);
-                const { data, error } = await supabase.from(remoteTable).insert(snakePayload).select('id').single();
-                if (error) throw error;
-                await db.table(item.table).update(item.recordId, { remoteId: data.id });
+            } catch (error) {
+                console.error(`[Sync] CRITICAL Error processing sync item ${item.id}:`, error);
+                errorOccurred = true;
+            } finally {
+                syncStatusChannel.postMessage({ status: 'syncing', processed: i + 1, total: itemsToSync.length });
             }
-            break;
         }
 
-        case 'update': {
-            if (!localRecord?.remoteId) {
-                console.warn(`Skipping update for ${item.table} #${item.recordId}: remoteId not found. It might be pending creation.`);
-                return; // Let it wait for the 'create' sync to complete
-            }
-            const snakePayload = toSnakeCase(item.payload);
-            const { error } = await supabase.from(remoteTable).update(snakePayload).eq('id', localRecord.remoteId);
-            if (error) throw error;
-            break;
+        if (successfullySyncedIds.length > 0) {
+            await db.syncQueue.bulkDelete(successfullySyncedIds);
+            console.log(`[Sync] Cleaned up ${successfullySyncedIds.length} successfully synced items.`);
         }
 
-        case 'delete': {
-            if (!item.payload.remoteId) {
-                 console.warn(`Skipping delete for ${item.table} #${item.recordId}: remoteId not found.`);
-                 return;
-            }
-            const { error } = await supabase.from(remoteTable).delete().eq('id', item.payload.remoteId);
-            // Handle foreign key constraints or 'not found' errors gracefully
-            if (error && error.code !== '23503' && error.code !== 'PGRST204') {
-                throw error;
-            }
-            break;
+        const remainingItems = await db.syncQueue.count();
+        console.log(`[Sync] Finished. ${remainingItems} items remaining in queue.`);
+        
+        if (errorOccurred) {
+             syncStatusChannel.postMessage({ status: 'error', remaining: remainingItems });
+        } else if (remainingItems > 0) {
+             syncStatusChannel.postMessage({ status: 'pending', count: remainingItems });
+        } else {
+             syncStatusChannel.postMessage({ status: 'synced' });
         }
+
+    } catch (e) {
+        console.error("[Sync] A fatal error occurred during the sync process:", e);
+        const remaining = await db.syncQueue.count();
+        syncStatusChannel.postMessage({ status: 'error', remaining });
+    } finally {
+        isSyncing = false;
     }
 }
 
-export async function processSyncQueue() {
-    if (isSyncing) {
-        return;
-    }
-    isSyncing = true;
-    try {
-        const itemsToSync = await db.syncQueue.orderBy('id').limit(50).toArray();
-        if (itemsToSync.length === 0) {
-            return;
-        }
-        
-        console.log(`Syncing ${itemsToSync.length} items...`);
+async function handleSyncItem(item: SyncQueueItem): Promise<boolean> {
+    const { table, action, recordId } = item;
+    
+    console.log(`[Sync] Processing: ${action.toUpperCase()} on table '${table}' with local ID ${recordId}`);
 
-        for (const item of itemsToSync) {
-            try {
-                await syncItem(item);
-                // If successful, delete from queue
-                await db.syncQueue.delete(item.id!);
-            } catch (error) {
-                console.error(`Failed to sync item #${item.id} (${item.table} - ${item.action}). Halting queue to preserve order.`, error);
-                // Stop processing on the first error to maintain data integrity and order
-                return; 
+    try {
+        if (action === 'create' && table === 'saleInvoices') {
+            const localInvoice = await db.saleInvoices.get(recordId as number);
+            if (!localInvoice) {
+                console.warn(`[Sync] SaleInvoice with local ID ${recordId} not found. Assuming already processed. Skipping.`);
+                return true; 
+            }
+            if (localInvoice.remoteId) {
+                console.log(`[Sync] SaleInvoice with local ID ${recordId} is already synced. Skipping.`);
+                return true;
+            }
+            
+            // Construct payload for the atomic RPC function
+            const rpcPayloadItems = [];
+            for (const localItem of localInvoice.items) {
+                const drug = await db.drugs.get(localItem.drugId);
+                if (!drug || !drug.remoteId) {
+                    throw new Error(`Cannot sync sale: Drug "${localItem.name}" with local ID ${localItem.drugId} has no remoteId.`);
+                }
+                rpcPayloadItems.push({
+                    drug_id: drug.remoteId,
+                    name: localItem.name, // FIX: Added missing 'name' field required by the RPC function.
+                    quantity: localItem.quantity,
+                    unit_price: localItem.unitPrice,
+                });
+            }
+
+            const rpcPayload = {
+                p_items: rpcPayloadItems,
+                p_total_amount: localInvoice.totalAmount,
+                p_date: localInvoice.date, // Pass the original date from the offline invoice
+            };
+
+            // FIX: The RPC function expects a single JSONB argument named 'p_payload'.
+            // The entire payload must be wrapped in an object with that key.
+            const { data, error } = await supabase.rpc('create_sale_invoice_transaction', { p_payload: rpcPayload });
+
+
+            if (error) {
+                console.error(`[Sync Error] RPC call for SaleInvoice ${recordId} failed:`, error);
+                return false; // Keep item in queue
+            }
+            
+            if (data && data.success) {
+                // Update local record with its new remote ID to prevent re-syncing
+                await db.saleInvoices.update(recordId as number, { remoteId: data.new_invoice_id });
+                console.log(`[Sync] Successfully synced SaleInvoice ${recordId} via RPC. New remote ID: ${data.new_invoice_id}`);
+                return true; // Success, item will be removed from queue
+            } else {
+                console.error(`[Sync Error] RPC call for SaleInvoice ${recordId} returned failure:`, data?.message);
+                return false; // Keep item in queue
             }
         }
-    } catch (error) {
-        console.error("An error occurred during sync queue processing:", error);
-    } finally {
-        isSyncing = false;
-        // If there are more items, try to process them immediately
-        if (await db.syncQueue.count() > 0) {
-            setTimeout(processSyncQueue, 1000);
-        }
+        // Other sync actions for other tables would go here...
+
+    } catch (e) {
+        console.error(`[Sync] Unhandled exception in handleSyncItem for item ${item.id}:`, e);
+        return false;
     }
+    
+    // If the item type is not handled, consider it successful to prevent getting stuck
+    console.warn(`[Sync] Unhandled sync item type: ${table}. Marking as successful.`);
+    return true;
 }

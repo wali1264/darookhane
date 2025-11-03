@@ -1,7 +1,6 @@
-import React, { useState, useMemo, FormEvent } from 'react';
-import { useLiveQuery } from 'dexie-react-hooks';
+import React, { useState, useMemo, FormEvent, useEffect, useCallback } from 'react';
 import { db } from '../db';
-import { Plus, Search, Trash2, X, Edit, Printer } from 'lucide-react';
+import { Plus, Search, Trash2, Edit, Printer } from 'lucide-react';
 import Modal from '../components/Modal';
 import { PurchaseInvoice, PurchaseInvoiceItem, Supplier, Drug } from '../types';
 import PrintablePurchaseInvoice from '../components/PrintablePurchaseInvoice';
@@ -10,18 +9,86 @@ import VoiceControlHeader from '../components/VoiceControlHeader';
 import { useAuth } from '../contexts/AuthContext';
 import { useNotification } from '../contexts/NotificationContext';
 import { logActivity } from '../lib/activityLogger';
+import { useOnlineStatus } from '../hooks/useOnlineStatus';
+import { supabase } from '../lib/supabaseClient';
+import { useLiveQuery } from 'dexie-react-hooks';
 
 const Purchases: React.FC = () => {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editingInvoice, setEditingInvoice] = useState<PurchaseInvoice | null>(null);
     const [invoiceToPrint, setInvoiceToPrint] = useState<PurchaseInvoice | null>(null);
-    const { hasPermission } = useAuth();
-    
-    const purchaseInvoices = useLiveQuery(() => db.purchaseInvoices.orderBy('date').reverse().toArray(), []);
-    const suppliers = useLiveQuery(() => db.suppliers.toArray(), []);
+    const [purchaseInvoices, setPurchaseInvoices] = useState<PurchaseInvoice[]>([]);
+    const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+    const [isLoading, setIsLoading] = useState(true);
 
+    const { hasPermission } = useAuth();
+    const isOnline = useOnlineStatus();
+
+    const fetchData = useCallback(async () => {
+        if (!isOnline) {
+            setIsLoading(false);
+            // Clear data when offline to avoid showing stale information
+            setPurchaseInvoices([]);
+            setSuppliers([]);
+            return;
+        }
+        setIsLoading(true);
+        try {
+            const { data: invoicesData, error: invoicesError } = await supabase
+                .from('purchase_invoices')
+                .select('*, purchase_invoice_items(*)')
+                .order('date', { ascending: false });
+
+            if (invoicesError) throw invoicesError;
+            
+            const formattedInvoices = invoicesData.map((inv: any) => ({
+                ...inv,
+                id: inv.id,
+                remoteId: inv.id,
+                invoiceNumber: inv.invoice_number,
+                supplierId: inv.supplier_id,
+                totalAmount: inv.total_amount,
+                amountPaid: inv.amount_paid,
+                items: inv.purchase_invoice_items.map((item: any) => ({
+                    drugId: item.drug_id,
+                    name: item.name,
+                    quantity: item.quantity,
+                    purchasePrice: item.purchase_price,
+                    lotNumber: item.lot_number,
+                    expiryDate: item.expiry_date,
+                }))
+            }));
+            setPurchaseInvoices(formattedInvoices);
+
+            const { data: suppliersData, error: suppliersError } = await supabase
+                .from('suppliers')
+                .select('*');
+            
+            if (suppliersError) throw suppliersError;
+            setSuppliers(suppliersData.map((s: any) => ({ ...s, remoteId: s.id, totalDebt: s.total_debt, contactPerson: s.contact_person })));
+
+        } catch (error) {
+            console.error("Error fetching purchases data:", error);
+        } finally {
+            setIsLoading(false);
+        }
+    }, [isOnline]);
+
+    useEffect(() => {
+        fetchData();
+    }, [fetchData]);
+    
     const getSupplierName = (id: number) => {
         return suppliers?.find(s => s.id === id)?.name || 'ناشناخته';
+    };
+    
+    const openModalForNew = () => {
+        setEditingInvoice(null);
+        setIsModalOpen(true);
+    };
+
+    const handleSaveSuccess = () => {
+        fetchData(); // Re-fetch the data after a successful save
     };
 
     return (
@@ -30,8 +97,10 @@ const Purchases: React.FC = () => {
                 <h2 className="text-3xl font-bold text-white">مدیریت خریدها</h2>
                 {hasPermission('purchases:create') && (
                     <button
-                        onClick={() => setIsModalOpen(true)}
-                        className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                        onClick={openModalForNew}
+                        disabled={!isOnline}
+                        title={!isOnline ? "این عملیات در حالت آفلاین در دسترس نیست" : "ثبت فاکتور جدید"}
+                        className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:bg-gray-500 disabled:cursor-not-allowed"
                     >
                         <Plus size={20} />
                         <span>ثبت فاکتور جدید</span>
@@ -50,31 +119,39 @@ const Purchases: React.FC = () => {
                         </tr>
                     </thead>
                     <tbody>
-                        {purchaseInvoices?.length === 0 && (
-                            <tr>
-                                <td colSpan={5} className="text-center py-10 text-gray-500">
-                                    هنوز فاکتور خریدی ثبت نشده است.
-                                </td>
-                            </tr>
+                        {isLoading ? (
+                            <tr><td colSpan={5} className="text-center py-10 text-gray-500">در حال بارگذاری...</td></tr>
+                        ) : !isOnline ? (
+                             <tr><td colSpan={5} className="text-center py-10 text-yellow-400">این بخش در حالت آفلاین در دسترس نیست.</td></tr>
+                        ) : purchaseInvoices?.length === 0 ? (
+                            <tr><td colSpan={5} className="text-center py-10 text-gray-500">هنوز فاکتور خریدی ثبت نشده است.</td></tr>
+                        ) : (
+                            purchaseInvoices?.map(invoice => (
+                                <tr key={invoice.id} className="bg-gray-800 border-b border-gray-700 hover:bg-gray-700/50">
+                                    <td className="px-6 py-4 font-medium text-white">{invoice.invoiceNumber}</td>
+                                    <td className="px-6 py-4">{getSupplierName(invoice.supplierId)}</td>
+                                    <td className="px-6 py-4">{new Date(invoice.date).toLocaleDateString('fa-IR')}</td>
+                                    <td className="px-6 py-4">${invoice.totalAmount.toFixed(2)}</td>
+                                    <td className="px-6 py-4 flex items-center gap-4">
+                                        <button onClick={() => setInvoiceToPrint(invoice)} className="text-gray-400 hover:text-white" title="چاپ فاکتور"><Printer size={18} /></button>
+                                        {hasPermission('purchases:edit') && (
+                                            <button 
+                                                onClick={() => setEditingInvoice(invoice)} 
+                                                disabled={!isOnline}
+                                                className="text-blue-400 hover:text-blue-300 disabled:text-gray-500 disabled:cursor-not-allowed" 
+                                                title={!isOnline ? "این عملیات در حالت آفلاین در دسترس نیست" : "ویرایش فاکتور"}
+                                            >
+                                                <Edit size={18} />
+                                            </button>
+                                        )}
+                                    </td>
+                                </tr>
+                            ))
                         )}
-                        {purchaseInvoices?.map(invoice => (
-                            <tr key={invoice.id} className="bg-gray-800 border-b border-gray-700 hover:bg-gray-700/50">
-                                <td className="px-6 py-4 font-medium text-white">{invoice.invoiceNumber}</td>
-                                <td className="px-6 py-4">{getSupplierName(invoice.supplierId)}</td>
-                                <td className="px-6 py-4">{new Date(invoice.date).toLocaleDateString('fa-IR')}</td>
-                                <td className="px-6 py-4">${invoice.totalAmount.toFixed(2)}</td>
-                                <td className="px-6 py-4 flex items-center gap-4">
-                                    <button onClick={() => setInvoiceToPrint(invoice)} className="text-gray-400 hover:text-white" title="چاپ فاکتور"><Printer size={18} /></button>
-                                    {hasPermission('purchases:edit') && (
-                                        <button onClick={() => setEditingInvoice(invoice)} className="text-blue-400 hover:text-blue-300" title="ویرایش فاکتور"><Edit size={18} /></button>
-                                    )}
-                                </td>
-                            </tr>
-                        ))}
                     </tbody>
                 </table>
             </div>
-            {isModalOpen && <PurchaseFormModal onClose={() => setIsModalOpen(false)} />}
+            {isModalOpen && <PurchaseFormModal onClose={() => setIsModalOpen(false)} onSaveSuccess={handleSaveSuccess} />}
             {invoiceToPrint && (
                 <PrintModal
                     invoice={invoiceToPrint}
@@ -122,9 +199,8 @@ type PurchaseItemData = Omit<PurchaseInvoiceItem, 'quantity' | 'purchasePrice'> 
 
 const validateExpiry = (value: string): boolean => {
     const trimmedValue = value.trim();
-    if (!trimmedValue) return true; // Empty is valid from a format perspective
+    if (!trimmedValue) return true;
 
-    // Check for YYYY-MM-DD format, which might be set by the onBlur handler
     const yyyy_mm_dd_regex = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/;
     const yyyy_mm_dd_match = trimmedValue.match(yyyy_mm_dd_regex);
     if (yyyy_mm_dd_match) {
@@ -135,7 +211,6 @@ const validateExpiry = (value: string): boolean => {
         return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day && year > 2000 && year < 2100;
     }
 
-    // Original regex for user input formats (M/YYYY, YYYY/M, MMYYYY)
     const regex = /^(?:(\d{1,2})[\s\/-]?)(\d{4})$|^(\d{4})[\s\/-]?(\d{1,2})$/;
     const match = trimmedValue.match(regex);
     let monthStr, yearStr;
@@ -156,16 +231,18 @@ const validateExpiry = (value: string): boolean => {
     return false;
 };
 
-const PurchaseFormModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
+const PurchaseFormModal: React.FC<{ onClose: () => void; onSaveSuccess: () => void; }> = ({ onClose, onSaveSuccess }) => {
     const [supplierId, setSupplierId] = useState<number | undefined>(undefined);
     const [invoiceNumber, setInvoiceNumber] = useState('');
     const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
     const [items, setItems] = useState<PurchaseItemData[]>([]);
     const [searchTerm, setSearchTerm] = useState('');
     const { showNotification } = useNotification();
-
+    const [isSaving, setIsSaving] = useState(false);
+    
     const suppliers = useLiveQuery(() => db.suppliers.orderBy('name').toArray(), []);
     const drugs = useLiveQuery(() => db.drugs.toArray(), []);
+
 
     const searchResults = useMemo(() => {
         if (!searchTerm || !drugs) return [];
@@ -273,13 +350,17 @@ const PurchaseFormModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
 
     const handleSubmit = async (e: FormEvent) => {
         e.preventDefault();
+        setIsSaving(true);
+
         if (!supplierId || items.length === 0 || !invoiceNumber) {
             showNotification('لطفاً تمام اطلاعات فاکتور را تکمیل کنید.', 'error');
+            setIsSaving(false);
             return;
         }
         
         if (items.some(item => !item.isExpiryDateValid)) {
             showNotification('فرمت تاریخ انقضا در یک یا چند قلم نامعتبر است.', 'error');
+            setIsSaving(false);
             return;
         }
 
@@ -292,64 +373,60 @@ const PurchaseFormModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
              purchasePrice: Number(item.purchasePrice) || 0,
         }));
 
-        if (finalItems.some(item => item.quantity <= 0 || item.purchasePrice <= 0 || !item.lotNumber || !item.expiryDate)) {
-            showNotification('لطفاً تمام فیلدهای اقلام فاکتور را به درستی وارد کنید.', 'error');
+        if (finalItems.some(item => item.quantity <= 0 || item.purchasePrice < 0 || !item.lotNumber || !item.expiryDate)) {
+            showNotification('لطفاً تمام فیلدهای اقلام فاکتور را به درستی وارد کنید. قیمت خرید نمی‌تواند منفی باشد.', 'error');
+            setIsSaving(false);
             return;
         }
 
-        const invoice = {
-            invoiceNumber,
-            supplierId,
-            date,
-            items: finalItems,
-            totalAmount,
-            amountPaid: 0,
-        };
-
         try {
-            let newInvoiceIdForLog: number | undefined;
-            await db.transaction('rw', db.purchaseInvoices, db.drugs, db.drugBatches, db.suppliers, async () => {
-                const newInvoiceId = await db.purchaseInvoices.add(invoice);
-                newInvoiceIdForLog = newInvoiceId;
-
-                for (const item of finalItems) {
-                    const existingBatch = await db.drugBatches
-                        .where({ drugId: item.drugId, lotNumber: item.lotNumber }).first();
-
-                    if (existingBatch) {
-                        await db.drugBatches.update(existingBatch.id!, { 
-                            quantityInStock: existingBatch.quantityInStock + item.quantity 
-                        });
-                    } else {
-                        await db.drugBatches.add({
-                            drugId: item.drugId,
-                            lotNumber: item.lotNumber,
-                            expiryDate: item.expiryDate,
-                            quantityInStock: item.quantity,
-                            purchasePrice: item.purchasePrice,
-                        });
-                    }
-                    
-                    await db.drugs.where('id').equals(item.drugId).modify(drug => {
-                        drug.totalStock += item.quantity;
-                        drug.purchasePrice = item.purchasePrice;
-                    });
-                }
-
-                await db.suppliers.where('id').equals(supplierId).modify(supplier => {
-                    supplier.totalDebt += totalAmount;
-                });
-            });
-
-            if (newInvoiceIdForLog) {
-                await logActivity('CREATE', 'PurchaseInvoice', newInvoiceIdForLog, { invoice: { id: newInvoiceIdForLog, ...invoice } });
+            const supplier = suppliers?.find(s => s.id === supplierId);
+            if (!supplier || !supplier.remoteId) {
+                throw new Error("تامین‌کننده انتخاب شده معتبر نیست یا هنوز همگام‌سازی نشده است.");
             }
 
-            showNotification('فاکتور خرید با موفقیت ثبت شد.', 'success');
-            onClose();
-        } catch (error) {
-            console.error("Failed to save purchase invoice:", error);
-            showNotification('خطا در ثبت فاکتور. لطفاً دوباره تلاش کنید.', 'error');
+            const payloadItems = [];
+            for (const item of finalItems) {
+                const drug = drugs?.find(d => d.id === item.drugId);
+                if (!drug || !drug.remoteId) {
+                    throw new Error(`داروی "${item.name}" معتبر نیست یا هنوز همگام‌سازی نشده است.`);
+                }
+                payloadItems.push({
+                    drug_id: drug.remoteId,
+                    name: item.name,
+                    quantity: item.quantity,
+                    purchase_price: item.purchasePrice,
+                    lot_number: item.lotNumber,
+                    expiry_date: item.expiryDate,
+                });
+            }
+            
+            const payload = {
+                invoice_number: invoiceNumber,
+                supplier_id: supplier.remoteId,
+                date: date,
+                total_amount: totalAmount,
+                items: payloadItems,
+            };
+    
+            const { data, error } = await supabase.rpc('create_purchase_invoice_transaction', { p_payload: payload });
+
+            if (error) throw error;
+
+            if (data.success) {
+                await logActivity('CREATE', 'PurchaseInvoice', data.new_invoice_id, { invoice: payload });
+                showNotification(data.message, 'success');
+                onSaveSuccess();
+                onClose();
+            } else {
+                throw new Error(data.message);
+            }
+
+        } catch (error: any) {
+            console.error("Failed to save purchase invoice via RPC:", error);
+            showNotification(error.message || 'خطا در ثبت فاکتور. لطفاً دوباره تلاش کنید.', 'error');
+        } finally {
+            setIsSaving(false);
         }
     };
 
@@ -400,7 +477,9 @@ const PurchaseFormModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                      <p className="text-lg font-bold">مجموع کل: <span className="text-green-400">${totalAmount.toFixed(2)}</span></p>
                     <div className="flex justify-end gap-3">
                         <button type="button" onClick={onClose} className="px-4 py-2 bg-gray-600 rounded-lg hover:bg-gray-500">لغو</button>
-                        <button type="submit" className="px-4 py-2 bg-blue-600 rounded-lg hover:bg-blue-700">ذخیره فاکتور</button>
+                        <button type="submit" disabled={isSaving} className="px-4 py-2 bg-blue-600 rounded-lg hover:bg-blue-700 disabled:bg-gray-500">
+                            {isSaving ? 'در حال ذخیره...' : 'ذخیره فاکتور'}
+                        </button>
                     </div>
                 </div>
             </form>
@@ -518,72 +597,7 @@ const EditPurchaseInvoiceModal: React.FC<{ invoice: PurchaseInvoice; onClose: ()
 
     const handleUpdate = async (e: FormEvent) => {
         e.preventDefault();
-        
-        if (items.some(item => !item.isExpiryDateValid)) {
-            showNotification('فرمت تاریخ انقضا در یک یا چند قلم نامعتبر است.', 'error');
-            return;
-        }
-
-        const finalItems: PurchaseInvoiceItem[] = items.map(item => ({
-            drugId: item.drugId,
-            name: item.name,
-            lotNumber: item.lotNumber,
-            expiryDate: item.expiryDate,
-            quantity: Number(item.quantity) || 0,
-            purchasePrice: Number(item.purchasePrice) || 0,
-        }));
-
-        if (finalItems.some(item => item.quantity <= 0 || item.purchasePrice < 0 || !item.lotNumber || !item.expiryDate)) {
-             showNotification('لطفاً تمام فیلدهای اقلام فاکتور را به درستی وارد کنید.', 'error');
-            return;
-        }
-
-        try {
-            const updatedInvoiceData = {
-                invoiceNumber,
-                supplierId,
-                date,
-                items: finalItems,
-                totalAmount,
-            };
-            
-            const originalInvoice = await db.purchaseInvoices.get(invoice.id!);
-            if (!originalInvoice) throw new Error("Invoice not found");
-
-            await db.transaction('rw', db.purchaseInvoices, db.drugs, db.drugBatches, db.suppliers, async () => {
-                // --- 1. Revert original impact ---
-                for (const item of originalInvoice.items) {
-                    const batch = await db.drugBatches.where({ drugId: item.drugId, lotNumber: item.lotNumber }).first();
-                    if (!batch) throw new Error(`Batch for ${item.name} with lot ${item.lotNumber} not found.`);
-                    await db.drugBatches.update(batch.id!, { quantityInStock: batch.quantityInStock - item.quantity });
-                    await db.drugs.where('id').equals(item.drugId).modify(drug => { drug.totalStock -= item.quantity; });
-                }
-                await db.suppliers.where('id').equals(originalInvoice.supplierId).modify(supplier => { supplier.totalDebt -= originalInvoice.totalAmount; });
-
-                // --- 2. Apply new impact ---
-                for (const item of finalItems) {
-                    const batch = await db.drugBatches.where({ drugId: item.drugId, lotNumber: item.lotNumber }).first();
-                    if (batch) {
-                        await db.drugBatches.update(batch.id!, { quantityInStock: batch.quantityInStock + item.quantity });
-                    } else {
-                        await db.drugBatches.add({ drugId: item.drugId, lotNumber: item.lotNumber, expiryDate: item.expiryDate, quantityInStock: item.quantity, purchasePrice: item.purchasePrice });
-                    }
-                    await db.drugs.where('id').equals(item.drugId).modify(drug => { drug.totalStock += item.quantity; });
-                }
-                await db.suppliers.where('id').equals(supplierId).modify(supplier => { supplier.totalDebt += totalAmount; });
-
-                // --- 3. Update the invoice record ---
-                await db.purchaseInvoices.update(invoice.id!, updatedInvoiceData);
-            });
-
-            await logActivity('UPDATE', 'PurchaseInvoice', invoice.id!, { old: originalInvoice, new: { ...invoice, ...updatedInvoiceData } });
-            
-            showNotification('فاکتور با موفقیت ویرایش شد.', 'success');
-            onSave();
-        } catch (error) {
-            console.error("Failed to update invoice:", error);
-            showNotification(`خطا در ویرایش فاکتور: ${error}`, 'error');
-        }
+        showNotification('ویرایش فاکتور خرید در این نسخه پشتیبانی نمی‌شود.', 'info');
     };
 
     return (

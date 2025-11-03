@@ -8,6 +8,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useNotification } from '../contexts/NotificationContext';
 import { logActivity } from '../lib/activityLogger';
 import { supabase } from '../lib/supabaseClient';
+import { useOnlineStatus } from '../hooks/useOnlineStatus';
 
 const TabButton: React.FC<{ active: boolean; onClick: () => void; icon: React.ReactNode; text: string }> = ({ active, onClick, icon, text }) => (
     <button
@@ -61,6 +62,7 @@ const Settings: React.FC = () => {
 const AlertManagement: React.FC = () => {
     const { showNotification } = useNotification();
     const dbSettings = useLiveQuery(() => db.settings.toArray());
+    const isOnline = useOnlineStatus();
     
     const [lowStockThreshold, setLowStockThreshold] = useState<number | ''>(10);
     const [expiryValue, setExpiryValue] = useState<number | ''>(3);
@@ -93,6 +95,7 @@ const AlertManagement: React.FC = () => {
                 { key: 'lowStockThreshold', value: Number(lowStockThreshold) || 10 },
                 { key: 'expiryAlertThreshold', value: { value: Number(expiryValue) || 3, unit: expiryUnit } }
             ];
+            // ONLINE-FIRST: These settings are purely local, so we just write to Dexie.
             await db.settings.bulkPut(settingsToSave);
 
             const newSettings = {
@@ -100,7 +103,10 @@ const AlertManagement: React.FC = () => {
                 expiry: settingsToSave[1].value,
             };
 
-            await logActivity('UPDATE', 'Settings', 'alerts', { old: oldSettings, new: newSettings });
+            // We can still log this action to the remote server if online.
+            if (navigator.onLine) {
+                 await logActivity('UPDATE', 'Settings', 'alerts', { old: oldSettings, new: newSettings });
+            }
 
             showNotification('تنظیمات با موفقیت ذخیره شد.', 'success');
         } catch (error) {
@@ -165,7 +171,8 @@ const AlertManagement: React.FC = () => {
             <div className="flex justify-end pt-6 border-t border-gray-700">
                 <button
                     type="submit"
-                    disabled={isSaving}
+                    disabled={isSaving || !isOnline}
+                    title={!isOnline ? "این عملیات در حالت آفلاین در دسترس نیست" : "ذخیره تنظیمات"}
                     className="flex items-center justify-center gap-2 px-6 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:bg-gray-500"
                 >
                     <Save size={18} />
@@ -185,6 +192,7 @@ const BackupRestoreSection: React.FC = () => {
     const [dragOver, setDragOver] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const { showNotification } = useNotification();
+    const isOnline = useOnlineStatus();
 
     const handleBackup = async () => {
         setIsLoading(true);
@@ -246,18 +254,14 @@ const BackupRestoreSection: React.FC = () => {
                 if (!requiredTables.every(table => backupData.hasOwnProperty(table))) {
                     throw new Error("فایل پشتیبان نامعتبر است یا ساختار صحیحی ندارد.");
                 }
-
-                await db.transaction('rw', db.tables, async () => {
-                    for (const tableName of Object.keys(backupData)) {
-                        const table = db.table(tableName);
-                        await table.clear();
-                        await table.bulkAdd(backupData[tableName]);
-                    }
-                });
                 
-                await logActivity('RESTORE', 'Settings', 'database', { filename: file.name });
-                showNotification("بازیابی موفق بود. برنامه مجدداً بارگذاری می‌شود.", 'success');
-                setTimeout(() => window.location.reload(), 2000);
+                // In Online-First, restore is a complex operation.
+                // It would require clearing remote tables and then bulk inserting,
+                // preferably via a dedicated backend function.
+                // This client-side-only restore is now DANGEROUS as it will de-sync local and remote.
+                showNotification('بازیابی در این نسخه پشتیبانی نمی‌شود. این یک عملیات پیچیده سمت سرور است.', 'error');
+                setIsRestoring(false);
+                return;
 
             } catch (error) {
                 console.error("Restore failed:", error);
@@ -313,14 +317,16 @@ const BackupRestoreSection: React.FC = () => {
                     onDrop={handleDrop}
                     onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setDragOver(true); }}
                     onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); setDragOver(false); }}
-                    onClick={() => fileInputRef.current?.click()}
-                    className={`w-full p-8 border-2 border-dashed rounded-lg cursor-pointer transition-colors ${dragOver ? 'border-blue-400 bg-blue-900/20' : 'border-gray-600 hover:border-gray-500'}`}
+                    onClick={() => isOnline && fileInputRef.current?.click()}
+                    className={`w-full p-8 border-2 border-dashed rounded-lg transition-colors ${!isOnline ? 'cursor-not-allowed bg-gray-900/50' : (dragOver ? 'border-blue-400 bg-blue-900/20' : 'border-gray-600 hover:border-gray-500 cursor-pointer')}`}
                 >
-                    <input type="file" ref={fileInputRef} onChange={handleFileChange} accept=".json" className="hidden" />
+                    <input type="file" ref={fileInputRef} onChange={handleFileChange} accept=".json" className="hidden" disabled={!isOnline}/>
                     {isRestoring ? (
                         <p>در حال بازیابی...</p>
                     ) : (
-                        <p>فایل پشتیبان را اینجا بکشید یا برای انتخاب کلیک کنید</p>
+                         <p className={!isOnline ? 'text-gray-500' : ''}>
+                            {isOnline ? 'فایل پشتیبان را اینجا بکشید یا برای انتخاب کلیک کنید' : 'بازیابی فقط در حالت آنلاین امکان‌پذیر است'}
+                        </p>
                     )}
                 </div>
                  <div className="mt-4 p-3 bg-yellow-900/30 border border-yellow-700 rounded-lg flex items-start gap-3 text-right">
@@ -339,6 +345,7 @@ const SupplierPortalManagement: React.FC = () => {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [selectedSupplier, setSelectedSupplier] = useState<Supplier | null>(null);
     const { showNotification } = useNotification();
+    const isOnline = useOnlineStatus();
 
     const suppliers = useLiveQuery(() => db.suppliers.orderBy('name').toArray());
     const supplierAccounts = useLiveQuery(() => db.supplierAccounts.toArray());
@@ -371,7 +378,7 @@ const SupplierPortalManagement: React.FC = () => {
         const account = await db.supplierAccounts.where({ supplierId }).first();
         if (account?.id) {
             await db.supplierAccounts.delete(account.id);
-            await logActivity('DELETE', 'SupplierAccount', account.id, { deletedAccount: account });
+            await logActivity('DELETE', 'SupplierAccount', account.remoteId!, { deletedAccount: account });
             showNotification('حساب پورتال با موفقیت حذف شد.', 'success');
         }
     };
@@ -396,11 +403,11 @@ const SupplierPortalManagement: React.FC = () => {
                                 <td className="px-6 py-4 flex items-center justify-center gap-4">
                                     {account ? (
                                         <>
-                                            <button onClick={() => openModal(supplier)} className="text-blue-400 hover:text-blue-300" title="بازنشانی رمز عبور"><Edit size={18} /></button>
-                                            <button onClick={() => handleDeleteAccount(supplier.id)} className="text-red-400 hover:text-red-300" title="حذف حساب"><Trash2 size={18} /></button>
+                                            <button onClick={() => openModal(supplier)} disabled={!isOnline} className="text-blue-400 hover:text-blue-300 disabled:text-gray-600" title="بازنشانی رمز عبور"><Edit size={18} /></button>
+                                            <button onClick={() => handleDeleteAccount(supplier.remoteId)} disabled={!isOnline} className="text-red-400 hover:text-red-300 disabled:text-gray-600" title="حذف حساب"><Trash2 size={18} /></button>
                                         </>
                                     ) : (
-                                        <button onClick={() => openModal(supplier)} className="flex items-center gap-2 px-3 py-1.5 text-xs bg-blue-600 text-white rounded-md hover:bg-blue-700">
+                                        <button onClick={() => openModal(supplier)} disabled={!isOnline} className="flex items-center gap-2 px-3 py-1.5 text-xs bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-500 disabled:cursor-not-allowed">
                                             <Plus size={14} />
                                             <span>ایجاد حساب</span>
                                         </button>
@@ -428,6 +435,7 @@ const UserManagement: React.FC = () => {
     const [editingUser, setEditingUser] = useState<User | null>(null);
     const { hasPermission } = useAuth();
     const { showNotification } = useNotification();
+    const isOnline = useOnlineStatus();
 
     const users = useLiveQuery(() => db.users.toArray(), []);
     const roles = useLiveQuery(() => db.roles.toArray(), []);
@@ -453,7 +461,7 @@ const UserManagement: React.FC = () => {
         }
         
         // Call RPC to delete user from Supabase auth and users table
-        const { error } = await supabase.rpc('delete_user', { p_user_id: userId });
+        const { error } = await supabase.rpc('delete_user', { p_user_id: user?.remoteId });
         if (error) {
             showNotification(`خطا در حذف کاربر: ${error.message}`, 'error');
             return;
@@ -461,7 +469,7 @@ const UserManagement: React.FC = () => {
 
         // On success, delete from local DB
         await db.users.delete(userId);
-        await logActivity('DELETE', 'User', String(userId), { deletedUser: user });
+        await logActivity('DELETE', 'User', String(user?.remoteId), { deletedUser: user });
         showNotification('کاربر با موفقیت حذف شد.', 'success');
     };
     
@@ -469,7 +477,7 @@ const UserManagement: React.FC = () => {
         <div className="space-y-4">
             <div className="flex justify-end">
                 {hasPermission('settings:users:manage') && (
-                    <button onClick={openModalForNew} className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                    <button onClick={openModalForNew} disabled={!isOnline} className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-500 disabled:cursor-not-allowed">
                         <Plus size={20} /> افزودن کاربر جدید
                     </button>
                 )}
@@ -491,8 +499,8 @@ const UserManagement: React.FC = () => {
                                 <td className="px-6 py-4 flex items-center gap-4">
                                     {hasPermission('settings:users:manage') && (
                                         <>
-                                            <button onClick={() => openModalForEdit(user)} className="text-blue-400 hover:text-blue-300"><Edit size={18} /></button>
-                                            <button onClick={() => handleDelete(user.id)} className="text-red-400 hover:text-red-300"><Trash2 size={18} /></button>
+                                            <button onClick={() => openModalForEdit(user)} disabled={!isOnline} className="text-blue-400 hover:text-blue-300 disabled:text-gray-600"><Edit size={18} /></button>
+                                            <button onClick={() => handleDelete(user.id)} disabled={!isOnline} className="text-red-400 hover:text-red-300 disabled:text-gray-600"><Trash2 size={18} /></button>
                                         </>
                                     )}
                                 </td>
@@ -512,6 +520,7 @@ const RoleManagement: React.FC = () => {
     const [editingRole, setEditingRole] = useState<Role | null>(null);
     const { hasPermission } = useAuth();
     const { showNotification } = useNotification();
+    const isOnline = useOnlineStatus();
     
     const roles = useLiveQuery(() => db.roles.toArray(), []);
 
@@ -544,8 +553,16 @@ const RoleManagement: React.FC = () => {
             return;
         }
         
+        // ONLINE-FIRST
+        if (role.remoteId) {
+            const { error } = await supabase.from('roles').delete().eq('id', role.remoteId);
+            if (error) {
+                showNotification(`خطا در حذف از سرور: ${error.message}`, 'error');
+                return;
+            }
+        }
         await db.roles.delete(roleId);
-        await logActivity('DELETE', 'Role', String(roleId), { deletedRole: role });
+        await logActivity('DELETE', 'Role', String(role.remoteId), { deletedRole: role });
         showNotification('نقش با موفقیت حذف شد.', 'success');
     };
 
@@ -553,7 +570,7 @@ const RoleManagement: React.FC = () => {
         <div className="space-y-4">
             <div className="flex justify-end">
                 {hasPermission('settings:roles:manage') && (
-                    <button onClick={openModalForNew} className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                    <button onClick={openModalForNew} disabled={!isOnline} className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-500 disabled:cursor-not-allowed">
                         <Plus size={20} /> افزودن نقش جدید
                     </button>
                 )}
@@ -575,8 +592,8 @@ const RoleManagement: React.FC = () => {
                                 <td className="px-6 py-4 flex items-center gap-4">
                                      {hasPermission('settings:roles:manage') && role.isEditable && (
                                         <>
-                                            <button onClick={() => openModalForEdit(role)} className="text-blue-400 hover:text-blue-300"><Edit size={18} /></button>
-                                            <button onClick={() => handleDelete(role.id)} className="text-red-400 hover:text-red-300"><Trash2 size={18} /></button>
+                                            <button onClick={() => openModalForEdit(role)} disabled={!isOnline} className="text-blue-400 hover:text-blue-300 disabled:text-gray-600"><Edit size={18} /></button>
+                                            <button onClick={() => handleDelete(role.id)} disabled={!isOnline} className="text-red-400 hover:text-red-300 disabled:text-gray-600"><Trash2 size={18} /></button>
                                         </>
                                      )}
                                 </td>
@@ -590,7 +607,7 @@ const RoleManagement: React.FC = () => {
     );
 };
 
-// Supplier Account Form Modal
+// Supplier Account Form Modal (Already Online-First via RPC)
 const SupplierAccountFormModal: React.FC<{ supplier: Supplier; account: SupplierAccount | undefined; onClose: () => void; }> = ({ supplier, account, onClose }) => {
     const [username, setUsername] = useState(account?.username || '');
     const [password, setPassword] = useState('');
@@ -606,7 +623,7 @@ const SupplierAccountFormModal: React.FC<{ supplier: Supplier; account: Supplier
 
         try {
             const { data, error } = await supabase.rpc('create_or_update_supplier_account', {
-                p_supplier_id: supplier.id,
+                p_supplier_id: supplier.remoteId,
                 p_username: username.trim(),
                 p_password: password.trim() // Send empty string if not changing
             });
@@ -617,16 +634,16 @@ const SupplierAccountFormModal: React.FC<{ supplier: Supplier; account: Supplier
             }
 
             // On success, update local Dexie DB for immediate UI feedback
-            const localAccountData = {
+            const localAccountData: SupplierAccount = {
                 id: account?.id,
                 remoteId: data.remote_id,
                 supplierId: supplier.id!,
                 username: username.trim(),
             };
-            await db.supplierAccounts.put(localAccountData, account?.id); // `put` handles both create and update
+            const localId = await db.supplierAccounts.put(localAccountData); 
 
             await logActivity(isEditing ? 'UPDATE' : 'CREATE', 'SupplierAccount', data.remote_id, {
-                account: { supplierId: supplier.id, username: username.trim() }
+                account: { supplierId: supplier.remoteId, username: username.trim() }
             });
             
             showNotification(data.message, 'success');
@@ -657,7 +674,7 @@ const SupplierAccountFormModal: React.FC<{ supplier: Supplier; account: Supplier
 };
 
 
-// User Form Modal
+// User Form Modal (Already Online-First via RPC)
 const UserFormModal: React.FC<{ user: User | null; onClose: () => void; }> = ({ user, onClose }) => {
     const [username, setUsername] = useState(user?.username || '');
     const [password, setPassword] = useState('');
@@ -678,9 +695,9 @@ const UserFormModal: React.FC<{ user: User | null; onClose: () => void; }> = ({ 
             if (isEditing && user?.id) {
                 // --- UPDATE USER ---
                 const { data, error } = await supabase.rpc('admin_update_user', {
-                    p_user_id: user.id,
+                    p_user_id: user.remoteId,
                     p_username: username.trim(),
-                    p_role_id: Number(roleId),
+                    p_role_id: Number(roleId), // This should be the role's remoteId
                     p_new_password: password.trim() // Send empty string if not changing
                 });
                 
@@ -692,15 +709,21 @@ const UserFormModal: React.FC<{ user: User | null; onClose: () => void; }> = ({ 
                 const oldUser = await db.users.get(user.id);
                 const updatedData = { username: username.trim(), roleId: Number(roleId) };
                 await db.users.update(user.id, updatedData);
-                await logActivity('UPDATE', 'User', user.id, { old: oldUser, new: updatedData });
+                await logActivity('UPDATE', 'User', user.remoteId!, { old: oldUser, new: updatedData });
                 showNotification(data.message, 'success');
 
             } else {
                 // --- CREATE USER ---
+                const localRole = await db.roles.get(Number(roleId));
+                if (!localRole?.remoteId) {
+                    showNotification('نقش انتخاب شده هنوز با سرور همگام‌سازی نشده است.', 'error');
+                    return;
+                }
+
                 const { data, error } = await supabase.rpc('create_new_user', {
                     p_username: username.trim(),
                     p_password: password.trim(),
-                    p_role_id: Number(roleId)
+                    p_role_id: localRole.remoteId
                 });
 
                 if (error || !data?.success) {
@@ -708,14 +731,13 @@ const UserFormModal: React.FC<{ user: User | null; onClose: () => void; }> = ({ 
                     return;
                 }
 
-                const newUser = {
-                    id: data.new_user_id, // Get ID from RPC response
+                const newUser: User = {
                     remoteId: data.new_user_id,
                     username: username.trim(),
                     roleId: Number(roleId),
                 };
                 await db.users.add(newUser); // Add to local DB for UI update
-                await logActivity('CREATE', 'User', newUser.id, { newUser });
+                await logActivity('CREATE', 'User', newUser.remoteId!, { newUser });
                 showNotification(data.message, 'success');
             }
             onClose();
@@ -771,25 +793,33 @@ const RoleFormModal: React.FC<{ role: Role | null; onClose: () => void; }> = ({ 
             showNotification('نام نقش نمی‌تواند خالی باشد.', 'error');
             return;
         }
-
-        // FIX: Explicitly type permissionsArray to resolve type inference issue.
+        
         const permissionsArray: Permission[] = Array.from(selectedPermissions);
+        const roleData = { name: name.trim(), permissions: permissionsArray, is_editable: true };
+
         try {
             if (isEditing && role?.id) {
                 const oldRole = await db.roles.get(role.id);
-                const newRoleData = { name, permissions: permissionsArray };
-                await db.roles.update(role.id, newRoleData);
-                await logActivity('UPDATE', 'Role', role.id, { old: oldRole, new: newRoleData });
+                // ONLINE-FIRST Update
+                const { error } = await supabase.from('roles').update(roleData).eq('id', role.remoteId);
+                if (error) throw error;
+                // Update local
+                await db.roles.update(role.id, { name: roleData.name, permissions: roleData.permissions });
+                await logActivity('UPDATE', 'Role', role.remoteId!, { old: oldRole, new: roleData });
                 showNotification('نقش با موفقیت ویرایش شد.', 'success');
             } else {
-                const existingRole = await db.roles.where('name').equalsIgnoreCase(name.trim()).first();
-                if (existingRole) {
-                    showNotification('نقشی با این نام وجود دارد.', 'error');
-                    return;
-                }
-                const newRole = { name: name.trim(), permissions: permissionsArray, isEditable: true };
-                const newId = await db.roles.add(newRole);
-                await logActivity('CREATE', 'Role', newId, { newRole: {id: newId, ...newRole} });
+                // ONLINE-FIRST Create
+                const { data: newData, error } = await supabase.from('roles').insert(roleData).select().single();
+                if (error) throw error;
+                // Create local
+                const newRole: Role = {
+                    name: newData.name,
+                    permissions: newData.permissions,
+                    isEditable: newData.is_editable,
+                    remoteId: newData.id,
+                };
+                await db.roles.add(newRole);
+                await logActivity('CREATE', 'Role', newData.id, { newRole: newData });
                 showNotification('نقش با موفقیت ایجاد شد.', 'success');
             }
             onClose();

@@ -3,9 +3,9 @@ import { supabase } from '../lib/supabaseClient';
 import { Permission } from '../types';
 import { useNotification } from './NotificationContext';
 import { logActivity } from '../lib/activityLogger';
+import { db } from '../db';
 
-// FIX: Changed AuthenticatedUser to a discriminated union to correctly type employee vs supplier users.
-// This resolves the issue where `supplierId` was missing for supplier users.
+// Changed AuthenticatedUser to a discriminated union to correctly type employee vs supplier users.
 interface BaseUser {
   id: number;
   username: string;
@@ -46,23 +46,12 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [permissions, setPermissions] = useState<Permission[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const { showNotification } = useNotification();
-
-  // On initial load, check session storage for a logged-in user
+  
+  // On initial load, we start with no user. Login is required.
   useEffect(() => {
-    try {
-      const storedUserJson = sessionStorage.getItem('shafayar_user');
-      const storedPermissionsJson = sessionStorage.getItem('shafayar_permissions');
-      if (storedUserJson && storedPermissionsJson) {
-        setCurrentUser(JSON.parse(storedUserJson));
-        setPermissions(JSON.parse(storedPermissionsJson));
-      }
-    } catch (error) {
-      console.error("Failed to parse user from session storage:", error);
-      sessionStorage.clear(); // Clear corrupted storage
-    } finally {
-      setIsLoading(false);
-    }
+    setIsLoading(false);
   }, []);
+
 
   const login = async (username_param: string, password_plaintext: string) => {
     setIsLoading(true);
@@ -78,22 +67,22 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             return { success: false, message: error.message };
         }
         
-        // RPC returns an array, we expect one or zero results
         if (data && data.length > 0) {
              const userData = data[0];
              const userToStore: AuthenticatedUser = {
                  id: userData.id,
                  username: userData.username,
-                 type: 'employee', // Hardcoded for now
+                 type: 'employee',
                  roleId: userData.role_id,
              };
              const userPermissions: Permission[] = userData.permissions;
 
              setCurrentUser(userToStore);
              setPermissions(userPermissions);
-             sessionStorage.setItem('shafayar_user', JSON.stringify(userToStore));
-             sessionStorage.setItem('shafayar_permissions', JSON.stringify(userPermissions));
              
+             // We need to keep a copy of user info for the activity logger, but not for session management.
+             sessionStorage.setItem('shafayar_user_info_for_logger', JSON.stringify({id: userToStore.id, username: userToStore.username, type: userToStore.type}));
+
              await logActivity('LOGIN', 'Authentication', userToStore.id, { message: 'User logged in successfully.' });
              showNotification('ورود موفقیت‌آمیز بود.', 'success');
              return { success: true, message: 'ورود موفقیت‌آمیز بود.' };
@@ -116,8 +105,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
     setCurrentUser(null);
     setPermissions([]);
-    sessionStorage.removeItem('shafayar_user');
-    sessionStorage.removeItem('shafayar_permissions');
+    sessionStorage.removeItem('shafayar_user_info_for_logger');
     showNotification('شما با موفقیت از سیستم خارج شدید.', 'info');
   };
 
@@ -129,7 +117,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (currentUser) {
       const updatedUser = { ...currentUser, username: newUsername };
       setCurrentUser(updatedUser);
-      sessionStorage.setItem('shafayar_user', JSON.stringify(updatedUser));
+      sessionStorage.setItem('shafayar_user_info_for_logger', JSON.stringify({id: updatedUser.id, username: updatedUser.username, type: updatedUser.type}));
     }
   };
 

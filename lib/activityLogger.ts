@@ -23,7 +23,7 @@ export async function logActivity(
     details: any
 ) {
     try {
-        const storedUserJson = sessionStorage.getItem('shafayar_user');
+        const storedUserJson = sessionStorage.getItem('shafayar_user_info_for_logger');
         if (!storedUserJson) {
             console.warn("No user found in session for activity logging. Action will not be logged.");
             return;

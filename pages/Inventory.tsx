@@ -9,6 +9,8 @@ import VoiceControlHeader from '../components/VoiceControlHeader';
 import { useAuth } from '../contexts/AuthContext';
 import { useNotification } from '../contexts/NotificationContext';
 import { logActivity } from '../lib/activityLogger';
+import { useOnlineStatus } from '../hooks/useOnlineStatus';
+import { supabase } from '../lib/supabaseClient';
 
 const Inventory: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -17,6 +19,7 @@ const Inventory: React.FC = () => {
   const [editingDrug, setEditingDrug] = useState<Drug | null>(null);
   const { hasPermission } = useAuth();
   const { showNotification } = useNotification();
+  const isOnline = useOnlineStatus();
 
   const drugs = useLiveQuery(() => db.drugs.toArray(), []);
   const drugBatches = useLiveQuery(() => db.drugBatches.toArray(), []);
@@ -74,20 +77,32 @@ const Inventory: React.FC = () => {
   };
 
   const handleDelete = async (id?: number) => {
-    if (id && window.confirm('آیا از حذف این دارو و تمام بچ‌های موجودی آن مطمئن هستید؟')) {
+    if (!id || !isOnline) {
+      showNotification('این عملیات در حالت آفلاین امکان‌پذیر نیست.', 'info');
+      return;
+    }
+    if (window.confirm('آیا از حذف این دارو و تمام بچ‌های موجودی آن مطمئن هستید؟')) {
       try {
         const drugToDelete = await db.drugs.get(id);
-        if (!drugToDelete) {
-          showNotification('دارو یافت نشد.', 'error');
+        if (!drugToDelete || !drugToDelete.remoteId) {
+          showNotification('دارو یافت نشد یا هنوز همگام‌سازی نشده است.', 'error');
           return;
         }
 
+        // --- ONLINE-FIRST: Delete from Supabase first ---
+        const { error: batchError } = await supabase.from('drug_batches').delete().eq('drug_id', drugToDelete.remoteId);
+        if (batchError) throw batchError;
+
+        const { error: drugError } = await supabase.from('drugs').delete().eq('id', drugToDelete.remoteId);
+        if (drugError) throw drugError;
+
+        // --- On success, delete from local cache ---
         await db.transaction('rw', db.drugs, db.drugBatches, async () => {
           await db.drugBatches.where({ drugId: id }).delete();
           await db.drugs.delete(id);
         });
         
-        await logActivity('DELETE', 'Drug', String(id), { deletedDrug: drugToDelete });
+        await logActivity('DELETE', 'Drug', String(drugToDelete.remoteId), { deletedDrug: drugToDelete });
         showNotification('دارو با موفقیت حذف شد.', 'success');
       } catch (error) {
         console.error("Failed to delete drug:", error);
@@ -103,7 +118,9 @@ const Inventory: React.FC = () => {
         {hasPermission('inventory:create') && (
             <button
             onClick={openModalForNew}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+            disabled={!isOnline}
+            title={!isOnline ? "این عملیات در حالت آفلاین در دسترس نیست" : "افزودن داروی جدید"}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:bg-gray-500 disabled:cursor-not-allowed"
             >
             <Plus size={20} />
             <span>افزودن داروی جدید</span>
@@ -136,8 +153,8 @@ const Inventory: React.FC = () => {
                         <td className="px-6 py-4">${drug.salePrice.toFixed(2)}</td>
                         <td className="px-6 py-4 flex items-center gap-4">
                             <button onClick={() => openBatchModal(drug)} className="text-gray-400 hover:text-white" title="مشاهده بچ‌ها"><PackageOpen size={18} /></button>
-                            {hasPermission('inventory:edit') && <button onClick={() => openModalForEdit(drug)} className="text-blue-400 hover:text-blue-300" title="ویرایش"><Edit size={18} /></button>}
-                            {hasPermission('inventory:delete') && <button onClick={() => handleDelete(drug.id)} className="text-red-400 hover:text-red-300" title="حذف"><Trash2 size={18} /></button>}
+                            {hasPermission('inventory:edit') && <button onClick={() => openModalForEdit(drug)} disabled={!isOnline} className="text-blue-400 hover:text-blue-300 disabled:text-gray-500 disabled:cursor-not-allowed" title={!isOnline ? "این عملیات در حالت آفلاین در دسترس نیست" : "ویرایش"}><Edit size={18} /></button>}
+                            {hasPermission('inventory:delete') && <button onClick={() => handleDelete(drug.id)} disabled={!isOnline} className="text-red-400 hover:text-red-300 disabled:text-gray-500 disabled:cursor-not-allowed" title={!isOnline ? "این عملیات در حالت آفلاین در دسترس نیست" : "حذف"}><Trash2 size={18} /></button>}
                         </td>
                     </tr>
                 );
@@ -206,6 +223,7 @@ type DrugFormData = Omit<Drug, 'id' | 'purchasePrice' | 'salePrice' | 'totalStoc
 
 const DrugFormModal: React.FC<{ drug: Drug | null; onClose: () => void; }> = ({ drug, onClose }) => {
   const { showNotification } = useNotification();
+  const [isSaving, setIsSaving] = useState(false);
   const [formData, setFormData] = useState<DrugFormData>({
     name: drug?.name || '',
     company: drug?.company || '',
@@ -408,9 +426,11 @@ const DrugFormModal: React.FC<{ drug: Drug | null; onClose: () => void; }> = ({ 
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
+    setIsSaving(true);
     
     if (!isExpiryDateValid) {
         showNotification('فرمت تاریخ انقضا نامعتبر است.', 'error');
+        setIsSaving(false);
         return;
     }
     
@@ -420,65 +440,109 @@ const DrugFormModal: React.FC<{ drug: Drug | null; onClose: () => void; }> = ({ 
         today.setHours(0, 0, 0, 0); 
         if (expiry < today) {
             showNotification('تاریخ انقضا نمی‌تواند در گذشته باشد.', 'error');
+            setIsSaving(false);
             return;
         }
     } else if (!drug && (!formData.lotNumber || !formData.expiryDate || formData.totalStock === '')) {
         showNotification('لطفاً اطلاعات بچ اولیه را وارد کنید.', 'error');
+        setIsSaving(false);
         return;
     }
     
     try {
       if (drug && drug.id) { // --- EDITING LOGIC ---
-        const dataToUpdate: Partial<Drug> = {
+        const dataToUpdate = {
           name: formData.name,
           company: formData.company,
-          salePrice: Number(formData.salePrice) || 0,
-          purchasePrice: Number(formData.purchasePrice) || 0,
+          sale_price: Number(formData.salePrice) || 0,
+          purchase_price: Number(formData.purchasePrice) || 0,
           type: formData.type,
-          barcode: formData.barcode || undefined,
-          internalBarcode: formData.internalBarcode || undefined,
+          barcode: formData.barcode || null,
+          internal_barcode: formData.internalBarcode || null,
         };
         const oldDrug = await db.drugs.get(drug.id);
-        await db.drugs.update(drug.id, dataToUpdate);
-        await logActivity('UPDATE', 'Drug', String(drug.id), { old: oldDrug, new: dataToUpdate });
-        showNotification('تغییرات با موفقیت ذخیره شد.', 'success');
-      } else { // --- ADDING NEW DRUG LOGIC ---
-        let newDrugId: number | undefined;
-        let drugDataForLog: any;
 
-        await db.transaction('rw', db.drugs, db.drugBatches, async () => {
-          const drugToSave: Omit<Drug, 'id'> = {
-            name: formData.name,
-            company: formData.company,
-            purchasePrice: Number(formData.purchasePrice) || 0,
-            salePrice: Number(formData.salePrice) || 0,
-            totalStock: Number(formData.totalStock) || 0,
-            type: formData.type,
-            barcode: formData.barcode || undefined,
-            internalBarcode: formData.internalBarcode || undefined,
-          };
-          newDrugId = await db.drugs.add(drugToSave as Drug) as number;
-          await db.drugBatches.add({
-            drugId: newDrugId,
-            lotNumber: formData.lotNumber,
-            expiryDate: formData.expiryDate,
-            quantityInStock: Number(formData.totalStock) || 0,
-            purchasePrice: Number(formData.purchasePrice) || 0,
-          });
-          
-          drugDataForLog = { newDrug: { ...drugToSave, id: newDrugId } };
+        // ONLINE-FIRST: Update Supabase
+        const { error } = await supabase.from('drugs').update(dataToUpdate).eq('id', drug.remoteId);
+        if (error) throw error;
+
+        // On success, update local cache
+        await db.drugs.update(drug.id, {
+            ...dataToUpdate,
+            salePrice: dataToUpdate.sale_price,
+            purchasePrice: dataToUpdate.purchase_price,
+            internalBarcode: dataToUpdate.internal_barcode
         });
 
-        if (newDrugId && drugDataForLog) {
-            await logActivity('CREATE', 'Drug', newDrugId, drugDataForLog);
+        await logActivity('UPDATE', 'Drug', String(drug.remoteId), { old: oldDrug, new: dataToUpdate });
+        showNotification('تغییرات با موفقیت ذخیره شد.', 'success');
+
+      } else { // --- ADDING NEW DRUG LOGIC ---
+        const drugToSave = {
+            name: formData.name,
+            company: formData.company,
+            purchase_price: Number(formData.purchasePrice) || 0,
+            sale_price: Number(formData.salePrice) || 0,
+            total_stock: Number(formData.totalStock) || 0,
+            type: formData.type,
+            barcode: formData.barcode || null,
+            internal_barcode: formData.internalBarcode || null,
+        };
+
+        // ONLINE-FIRST: Insert into Supabase and get the new record
+        const { data: newDrugData, error: drugError } = await supabase.from('drugs').insert(drugToSave).select().single();
+        if (drugError) throw drugError;
+
+        const batchToSave = {
+            drug_id: newDrugData.id,
+            lot_number: formData.lotNumber,
+            expiry_date: formData.expiryDate,
+            quantity_in_stock: Number(formData.totalStock) || 0,
+            purchase_price: Number(formData.purchasePrice) || 0,
+        };
+
+        const { data: newBatchData, error: batchError } = await supabase.from('drug_batches').insert(batchToSave).select().single();
+        
+        if (batchError) {
+            // Rollback: delete the drug that was just created
+            await supabase.from('drugs').delete().eq('id', newDrugData.id);
+            throw batchError;
         }
 
+        // On success, add to local cache
+        const localDrug: Drug = {
+            name: newDrugData.name,
+            company: newDrugData.company,
+            purchasePrice: newDrugData.purchase_price,
+            salePrice: newDrugData.sale_price,
+            totalStock: newDrugData.total_stock,
+            type: newDrugData.type,
+            barcode: newDrugData.barcode ?? undefined,
+            internalBarcode: newDrugData.internal_barcode ?? undefined,
+            remoteId: newDrugData.id,
+        };
+        
+        const newLocalDrugId = await db.drugs.add(localDrug);
+
+        const localBatch: DrugBatch = {
+            drugId: newLocalDrugId,
+            lotNumber: newBatchData.lot_number,
+            expiryDate: newBatchData.expiry_date,
+            quantityInStock: newBatchData.quantity_in_stock,
+            purchasePrice: newBatchData.purchase_price,
+            remoteId: newBatchData.id
+        };
+        await db.drugBatches.add(localBatch);
+
+        await logActivity('CREATE', 'Drug', newDrugData.id, { newDrug: newDrugData, newBatch: newBatchData });
         showNotification(`داروی "${formData.name}" با موفقیت اضافه شد.`, 'success');
       }
       onClose();
     } catch (error) {
        console.error("Failed to save drug:", error);
        showNotification('خطا در ذخیره دارو.', 'error');
+    } finally {
+        setIsSaving(false);
     }
   };
   
@@ -525,7 +589,7 @@ const DrugFormModal: React.FC<{ drug: Drug | null; onClose: () => void; }> = ({ 
         </div>
         <div className="flex justify-end gap-3 pt-4">
           <button type="button" onClick={onClose} className="px-4 py-2 bg-gray-600 rounded-lg hover:bg-gray-500">لغو</button>
-          <button type="submit" className="px-4 py-2 bg-blue-600 rounded-lg hover:bg-blue-700">{isEditing ? 'ذخیره تغییرات' : 'افزودن'}</button>
+          <button type="submit" disabled={isSaving} className="px-4 py-2 bg-blue-600 rounded-lg hover:bg-blue-700 disabled:bg-gray-500">{isSaving ? 'در حال ذخیره...' : (isEditing ? 'ذخیره تغییرات' : 'افزودن')}</button>
         </div>
       </form>
       <style>{`
