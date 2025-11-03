@@ -8,7 +8,7 @@ import Accounting from './pages/Accounting';
 import Settings from './pages/Settings';
 import Login from './pages/Login';
 import SupplierPortal from './pages/SupplierPortal';
-import { Page } from './types';
+import { Page, SaleInvoice, SaleItem } from './types';
 import Header from './components/Header';
 import AIAssistant from './components/AIAssistant';
 import { useAuth } from './contexts/AuthContext';
@@ -71,7 +71,8 @@ const pageTitles: Record<Page, string> = {
 // ============================================================================
 // FIX: Modified syncTable to accept separate local and remote table names to handle naming convention differences (camelCase vs. snake_case).
 const syncTable = async (localTableName: keyof typeof db, remoteTableName: string, remoteColumns: string, localMapper: (item: any) => any) => {
-    console.log(`[Sync] Starting sync for table: ${localTableName} from remote: ${remoteTableName}`);
+    // FIX: Wrap localTableName in String() to prevent implicit conversion error from symbol keys on Dexie object.
+    console.log(`[Sync] Starting sync for table: ${String(localTableName)} from remote: ${remoteTableName}`);
     const { data, error } = await supabase.from(remoteTableName).select(remoteColumns);
     if (error) {
         console.error(`[Sync] Error fetching ${remoteTableName}:`, error);
@@ -81,10 +82,77 @@ const syncTable = async (localTableName: keyof typeof db, remoteTableName: strin
         // Map remote data to local schema and add/update it in Dexie
         const localData = data.map(localMapper);
         // FIX: Correctly access the table method on the db instance. This relies on the fix in db.ts.
-        await db.table(localTableName).bulkPut(localData);
-        console.log(`[Sync] Successfully synced ${data.length} records for ${localTableName}.`);
+        // FIX: Wrap localTableName in String() to prevent implicit conversion error from symbol keys on Dexie object. This resolves the error on line 74.
+        await db.table(String(localTableName)).bulkPut(localData);
+        // FIX: Wrap localTableName in String() to prevent implicit conversion error from symbol keys on Dexie object.
+        console.log(`[Sync] Successfully synced ${data.length} records for ${String(localTableName)}.`);
     }
 };
+
+// ============================================================================
+// Data Synchronization Logic for Sales Invoices (Handles relations)
+// ============================================================================
+const syncSaleInvoicesWithItems = async () => {
+    console.log(`[Sync] Starting sync for sale invoices with items.`);
+    // Fetch recent 100 invoices with their items
+    const { data: remoteInvoices, error } = await supabase
+        .from('sale_invoices')
+        .select('*, sale_invoice_items(*)')
+        .order('date', { ascending: false })
+        .limit(100);
+
+    if (error) {
+        console.error(`[Sync] Error fetching sale_invoices:`, error);
+        return;
+    }
+
+    if (remoteInvoices) {
+        // Create a map of remote drug IDs to local drug IDs for efficient lookup
+        const localDrugs = await db.drugs.toArray();
+        const drugRemoteIdToLocalIdMap = new Map<number, number>();
+        localDrugs.forEach(drug => {
+            if (drug.remoteId && drug.id) {
+                drugRemoteIdToLocalIdMap.set(drug.remoteId, drug.id);
+            }
+        });
+
+        const localInvoicesToPut: SaleInvoice[] = [];
+        for (const remoteInv of remoteInvoices) {
+            const mappedItems: SaleItem[] = [];
+            
+            for (const remoteItem of remoteInv.sale_invoice_items) {
+                const localDrugId = drugRemoteIdToLocalIdMap.get(remoteItem.drug_id);
+                if (!localDrugId) {
+                    console.warn(`[Sync] Skipping sale item "${remoteItem.name}" because its drug (remoteId: ${remoteItem.drug_id}) is not found in local DB. The invoice might be incomplete.`);
+                    continue; 
+                }
+                mappedItems.push({
+                    drugId: localDrugId,
+                    name: remoteItem.name,
+                    quantity: remoteItem.quantity,
+                    unitPrice: remoteItem.unit_price,
+                    totalPrice: remoteItem.quantity * remoteItem.unit_price,
+                    deductions: [] // This is for local offline logic and not synced from server.
+                });
+            }
+
+            // To preserve the local auto-incrementing ID, we must check if the record exists.
+            const existingLocalInvoice = await db.saleInvoices.where('remoteId').equals(remoteInv.id).first();
+            
+            localInvoicesToPut.push({
+                id: existingLocalInvoice?.id, // Important to preserve local primary key
+                remoteId: remoteInv.id,
+                date: remoteInv.date,
+                totalAmount: remoteInv.total_amount,
+                items: mappedItems,
+            });
+        }
+        
+        await db.saleInvoices.bulkPut(localInvoicesToPut);
+        console.log(`[Sync] Successfully synced/updated ${localInvoicesToPut.length} sale invoices.`);
+    }
+};
+
 
 const AppContent: React.FC = () => {
   const { currentUser, isLoading } = useAuth();
@@ -107,6 +175,8 @@ const AppContent: React.FC = () => {
                     await syncTable('drugBatches', 'drug_batches', '*', item => ({ ...item, remoteId: item.id, drugId: item.drug_id, lotNumber: item.lot_number, expiryDate: item.expiry_date, quantityInStock: item.quantity_in_stock, purchasePrice: item.purchase_price }));
                     await syncTable('clinicServices', 'clinic_services', '*', item => ({ ...item, remoteId: item.id, requiresProvider: item.requires_provider }));
                     await syncTable('serviceProviders', 'service_providers', '*', item => ({ ...item, remoteId: item.id }));
+                    
+                    await syncSaleInvoicesWithItems();
                     
                     localStorage.setItem(`lastSync_${currentUser.id}`, Date.now().toString());
                 } catch (error) {
@@ -283,7 +353,6 @@ const App: React.FC = () => {
   return (
     <>
       <AppContent />
-      <SyncStatus />
     </>
   );
 };

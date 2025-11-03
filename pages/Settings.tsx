@@ -350,8 +350,10 @@ const SupplierPortalManagement: React.FC = () => {
     const suppliers = useLiveQuery(() => db.suppliers.orderBy('name').toArray());
     const supplierAccounts = useLiveQuery(() => db.supplierAccounts.toArray());
     
-    const accountsMap = useMemo(() => {
-        return new Map(supplierAccounts?.map(acc => [acc.supplierId, acc]));
+    // FIX: Explicitly typed useMemo to prevent TypeScript from inferring map values as 'unknown'.
+    const accountsMap = useMemo<Map<number, SupplierAccount>>(() => {
+        if (!supplierAccounts) return new Map();
+        return new Map(supplierAccounts.map(acc => [acc.supplierId, acc]));
     }, [supplierAccounts]);
 
     const openModal = (supplier: Supplier) => {
@@ -439,7 +441,11 @@ const UserManagement: React.FC = () => {
 
     const users = useLiveQuery(() => db.users.toArray(), []);
     const roles = useLiveQuery(() => db.roles.toArray(), []);
-    const rolesMap = useMemo(() => new Map(roles?.map(role => [role.id, role.name])), [roles]);
+    // FIX: Explicitly typed useMemo to prevent TypeScript from inferring map values as 'unknown'.
+    const rolesMap = useMemo<Map<number, string>>(() => {
+        if (!roles) return new Map();
+        return new Map(roles.map(role => [role.id!, role.name]));
+    }, [roles]);
 
     const openModalForNew = () => {
         setEditingUser(null);
@@ -628,25 +634,28 @@ const SupplierAccountFormModal: React.FC<{ supplier: Supplier; account: Supplier
                 p_password: password.trim() // Send empty string if not changing
             });
 
-            if (error || !data?.success) {
-                showNotification(data?.message || error?.message || 'خطا در ذخیره حساب.', 'error');
+            // FIX: Cast untyped RPC response to 'any' to prevent 'unknown' type errors.
+            const typedData = data as any;
+
+            if (error || !typedData?.success) {
+                showNotification(typedData?.message || error?.message || 'خطا در ذخیره حساب.', 'error');
                 return;
             }
 
             // On success, update local Dexie DB for immediate UI feedback
             const localAccountData: SupplierAccount = {
                 id: account?.id,
-                remoteId: data.remote_id,
+                remoteId: typedData.remote_id,
                 supplierId: supplier.id!,
                 username: username.trim(),
             };
-            const localId = await db.supplierAccounts.put(localAccountData); 
+            await db.supplierAccounts.put(localAccountData); 
 
-            await logActivity(isEditing ? 'UPDATE' : 'CREATE', 'SupplierAccount', data.remote_id, {
+            await logActivity(isEditing ? 'UPDATE' : 'CREATE', 'SupplierAccount', typedData.remote_id, {
                 account: { supplierId: supplier.remoteId, username: username.trim() }
             });
             
-            showNotification(data.message, 'success');
+            showNotification(typedData.message, 'success');
             onClose();
         } catch (err) {
             console.error("Error saving supplier account:", err);
@@ -701,8 +710,9 @@ const UserFormModal: React.FC<{ user: User | null; onClose: () => void; }> = ({ 
                     p_new_password: password.trim() // Send empty string if not changing
                 });
                 
-                if (error || !data?.success) {
-                    showNotification(data?.message || error?.message || 'خطا در ویرایش کاربر.', 'error');
+                const typedData = data as any;
+                if (error || !typedData?.success) {
+                    showNotification(typedData?.message || error?.message || 'خطا در ویرایش کاربر.', 'error');
                     return;
                 }
                 
@@ -710,7 +720,7 @@ const UserFormModal: React.FC<{ user: User | null; onClose: () => void; }> = ({ 
                 const updatedData = { username: username.trim(), roleId: Number(roleId) };
                 await db.users.update(user.id, updatedData);
                 await logActivity('UPDATE', 'User', user.remoteId!, { old: oldUser, new: updatedData });
-                showNotification(data.message, 'success');
+                showNotification(typedData.message, 'success');
 
             } else {
                 // --- CREATE USER ---
@@ -726,19 +736,20 @@ const UserFormModal: React.FC<{ user: User | null; onClose: () => void; }> = ({ 
                     p_role_id: localRole.remoteId
                 });
 
-                if (error || !data?.success) {
-                    showNotification(data?.message || error?.message || 'خطا در ایجاد کاربر.', 'error');
+                const typedData = data as any;
+                if (error || !typedData?.success) {
+                    showNotification(typedData?.message || error?.message || 'خطا در ایجاد کاربر.', 'error');
                     return;
                 }
 
                 const newUser: User = {
-                    remoteId: data.new_user_id,
+                    remoteId: typedData.new_user_id,
                     username: username.trim(),
                     roleId: Number(roleId),
                 };
                 await db.users.add(newUser); // Add to local DB for UI update
                 await logActivity('CREATE', 'User', newUser.remoteId!, { newUser });
-                showNotification(data.message, 'success');
+                showNotification(typedData.message, 'success');
             }
             onClose();
         } catch (err) {

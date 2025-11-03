@@ -11,7 +11,7 @@ import { logActivity } from '../lib/activityLogger';
 import { supabase } from '../lib/supabaseClient';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import PrintablePaymentReceipt from '../components/PrintablePaymentReceipt';
-import PrintableSupplierLedger from '../components/PrintableSupplierLedger';
+import PrintableSupplierLedger, { Transaction } from '../components/PrintableSupplierLedger';
 import PrintableClinicTicket from '../components/PrintableClinicTicket';
 import EditClinicTransactionModal from '../components/EditClinicTransactionModal';
 
@@ -61,14 +61,6 @@ const Accounting: React.FC = () => {
 // ============================================================================
 // Supplier Accounts Section
 // ============================================================================
-interface Transaction {
-  date: string;
-  description: string;
-  detail?: string;
-  debit: number;
-  credit: number;
-  balance: number;
-}
 const SupplierAccounts: React.FC = () => {
     const suppliers = useLiveQuery(() => db.suppliers.orderBy('name').toArray());
     const [selectedSupplier, setSelectedSupplier] = useState<Supplier | null>(null);
@@ -137,6 +129,16 @@ const PaymentModal: React.FC<{ supplier: Supplier; onClose: () => void }> = ({ s
             showNotification('لطفاً مبلغ و نام گیرنده را وارد کنید.', 'error');
             return;
         }
+
+        if (Number(amount) > supplier.totalDebt && supplier.totalDebt > 0) {
+            const confirmed = window.confirm(
+                `مبلغ وارد شده (${Number(amount).toFixed(2)}$) از بدهی فعلی شما (${supplier.totalDebt.toFixed(2)}$) بیشتر است. آیا از ثبت این پرداخت و بستانکار شدن تامین‌کننده اطمینان دارید؟`
+            );
+            if (!confirmed) {
+                return;
+            }
+        }
+
         setIsSaving(true);
         try {
             const paymentData = {
@@ -208,7 +210,54 @@ const LedgerModal: React.FC<{ supplier: Supplier; onClose: () => void }> = ({ su
     const [transactions, setTransactions] = useState<Transaction[]>([]);
     
     useEffect(() => {
-        const fetchTransactions = async () => {
+        const fetchAndProcessTransactions = async () => {
+            // JIT Sync: Fetch latest data from Supabase and cache it in Dexie before displaying.
+            if (navigator.onLine && supplier.remoteId) {
+                try {
+                    // Fetch and cache purchase invoices
+                    const { data: purchasesData } = await supabase.from('purchase_invoices').select('*').eq('supplier_id', supplier.remoteId);
+                    if (purchasesData) {
+                        const localPurchases = [];
+                        for (const p of purchasesData) {
+                            const existing = await db.purchaseInvoices.where('remoteId').equals(p.id).first();
+                            localPurchases.push({
+                                id: existing?.id,
+                                remoteId: p.id,
+                                invoiceNumber: p.invoice_number,
+                                supplierId: supplier.id!,
+                                date: p.date,
+                                items: [], // Ledger doesn't need items, so an empty array is fine.
+                                totalAmount: p.total_amount,
+                                amountPaid: p.amount_paid
+                            });
+                        }
+                        await db.purchaseInvoices.bulkPut(localPurchases);
+                    }
+
+                    // Fetch and cache payments
+                    const { data: paymentsData } = await supabase.from('payments').select('*').eq('supplier_id', supplier.remoteId);
+                    if (paymentsData) {
+                        const localPayments = [];
+                        for (const p of paymentsData) {
+                            const existing = await db.payments.where('remoteId').equals(p.id).first();
+                            localPayments.push({
+                                id: existing?.id,
+                                remoteId: p.id,
+                                supplierId: supplier.id!,
+                                amount: p.amount,
+                                date: p.date,
+                                recipientName: p.recipient_name,
+                                description: p.description
+                            });
+                        }
+                        await db.payments.bulkPut(localPayments);
+                    }
+                } catch (err) {
+                    console.error("Failed to sync ledger data from Supabase:", err);
+                    // Proceed with local data even if sync fails
+                }
+            }
+
             const purchases = await db.purchaseInvoices.where({ supplierId: supplier.id! }).toArray();
             const paymentsMade = await db.payments.where({ supplierId: supplier.id! }).toArray();
             
@@ -219,23 +268,49 @@ const LedgerModal: React.FC<{ supplier: Supplier; onClose: () => void }> = ({ su
 
             combined.sort((a, b) => new Date(a.data.date).getTime() - new Date(b.data.date).getTime());
 
-            let runningBalance = 0;
-            const transactionsWithBalance: Transaction[] = combined.map(item => {
+            const periodDebits = purchases.reduce((sum, p) => sum + p.totalAmount, 0);
+            const periodCredits = paymentsMade.reduce((sum, p) => sum + p.amount, 0);
+            const openingBalance = supplier.totalDebt - (periodDebits - periodCredits);
+
+            let runningBalance = openingBalance;
+            const transactionsWithBalance: Transaction[] = [];
+
+            if (combined.length > 0 || openingBalance !== 0) {
+                transactionsWithBalance.push({
+                    date: combined.length > 0 ? new Date(new Date(combined[0].data.date).getTime() - 1).toISOString() : new Date().toISOString(),
+                    description: 'مانده اولیه',
+                    debit: 0,
+                    credit: 0,
+                    balance: openingBalance,
+                    isOpeningBalance: true,
+                });
+            }
+            
+            combined.forEach(item => {
                 if (item.type === 'purchase') {
                     const p = item.data as PurchaseInvoice;
                     runningBalance += p.totalAmount;
-                    return { date: p.date, description: `فاکتور خرید #${p.invoiceNumber}`, debit: p.totalAmount, credit: 0, balance: runningBalance };
+                    transactionsWithBalance.push({ date: p.date, description: `فاکتور خرید #${p.invoiceNumber || ''}`, debit: p.totalAmount, credit: 0, balance: runningBalance });
                 } else {
                     const p = item.data as Payment;
                     runningBalance -= p.amount;
-                    return { date: p.date, description: `پرداخت به ${p.recipientName}`, detail: p.description, debit: 0, credit: p.amount, balance: runningBalance };
+                    transactionsWithBalance.push({ date: p.date, description: `پرداخت به ${p.recipientName || ''}`, detail: p.description, debit: 0, credit: p.amount, balance: runningBalance });
                 }
             });
+
+            if (transactionsWithBalance.length > 1) {
+                const finalCalculatedBalance = transactionsWithBalance[transactionsWithBalance.length - 1].balance;
+                if (Math.abs(finalCalculatedBalance - supplier.totalDebt) > 0.01) {
+                    console.warn(`Ledger final balance (${finalCalculatedBalance}) does not match supplier total debt (${supplier.totalDebt}). Forcing correct balance.`);
+                    transactionsWithBalance[transactionsWithBalance.length - 1].balance = supplier.totalDebt;
+                }
+            }
+            
             setTransactions(transactionsWithBalance);
         };
 
-        fetchTransactions();
-    }, [supplier.id]);
+        fetchAndProcessTransactions();
+    }, [supplier.id, supplier.remoteId, supplier.totalDebt]);
 
     return (
         <Modal title={`دفتر کل: ${supplier.name}`} onClose={onClose}>
@@ -268,8 +343,17 @@ const ClinicFund: React.FC = () => {
     const isOnline = useOnlineStatus();
 
     const selectedService = useMemo(() => services?.find(s => s.id === serviceId), [services, serviceId]);
-    const serviceMap = useMemo(() => new Map(services?.map(s => [s.id, s.name])), [services]);
-    const providerMap = useMemo(() => new Map(providers?.map(p => [p.id, p.name])), [providers]);
+    // FIX: Explicitly typed useMemo to prevent TypeScript from inferring map values as 'unknown'.
+    const serviceMap = useMemo<Map<number, string>>(() => {
+        if (!services) return new Map();
+        return new Map(services.map(s => [s.id!, s.name]));
+    }, [services]);
+    // FIX: Explicitly typed useMemo to prevent TypeScript from inferring map values as 'unknown'.
+    const providerMap = useMemo<Map<number, string>>(() => {
+        if (!providers) return new Map();
+        return new Map(providers.map(p => [p.id!, p.name]));
+    }, [providers]);
+
 
     const handleSubmit = async (e: FormEvent) => {
         e.preventDefault();
@@ -318,7 +402,8 @@ const ClinicFund: React.FC = () => {
             <Modal title="چاپ برگه نوبت" onClose={() => setTicketToPrint(null)}>
                 <PrintableClinicTicket 
                     transaction={ticketToPrint} 
-                    serviceName={serviceMap.get(ticketToPrint.serviceId)!}
+                    // FIX: Added a fallback to prevent runtime errors if a service is deleted but a transaction for it still exists.
+                    serviceName={serviceMap.get(ticketToPrint.serviceId) || 'سرویس نامشخص'}
                     providerName={ticketToPrint.providerId ? providerMap.get(ticketToPrint.providerId) : undefined}
                 />
                 <div className="flex justify-end gap-3 pt-4 border-t border-gray-700 print-hidden">
@@ -367,7 +452,8 @@ const ClinicFund: React.FC = () => {
                             {recentTransactions?.map(t => (
                                 <tr key={t.id}>
                                     <td className="px-4 py-2 font-bold text-blue-300">{t.ticketNumber}</td>
-                                    <td className="px-4 py-2">{serviceMap.get(t.serviceId)} {t.providerId ? `- ${providerMap.get(t.providerId)}` : ''}</td>
+                                    {/* FIX: Add fallback text for service/provider name in case they are deleted. */}
+                                    <td className="px-4 py-2">{serviceMap.get(t.serviceId) || 'سرویس نامشخص'} {t.providerId ? `- ${providerMap.get(t.providerId) || 'متخصص نامشخص'}` : ''}</td>
                                     <td className="px-4 py-2">{t.patientName || 'عمومی'}</td>
                                     <td className="px-4 py-2">${t.amount.toFixed(2)}</td>
                                     <td className="px-4 py-2 flex gap-2">

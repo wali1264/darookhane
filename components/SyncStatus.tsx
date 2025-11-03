@@ -3,6 +3,7 @@ import { RotateCw, CheckCircle, AlertTriangle, UploadCloud, WifiOff } from 'luci
 import { syncStatusChannel } from '../lib/syncService';
 import { db } from '../db';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
+import { useLiveQuery } from 'dexie-react-hooks';
 
 type SyncState = 'syncing' | 'pending' | 'synced' | 'error' | 'offline';
 
@@ -19,83 +20,82 @@ const SyncStatus: React.FC = () => {
     const [message, setMessage] = useState('');
     const [isVisible, setIsVisible] = useState(false);
     const isOnline = useOnlineStatus();
-    const successTimerRef = useRef<number | null>(null);
+    const syncQueueCount = useLiveQuery(() => db.syncQueue.count(), []);
+    const hideTimerRef = useRef<number | null>(null);
 
     useEffect(() => {
-        // This effect runs on mount and whenever online status changes.
+        // Always clear any pending hide timer when state changes
+        if (hideTimerRef.current) {
+            clearTimeout(hideTimerRef.current);
+            hideTimerRef.current = null;
+        }
+
         if (!isOnline) {
             setStatus('offline');
-            setMessage('شما آفلاین هستید');
+            if (syncQueueCount !== undefined && syncQueueCount > 0) {
+                setMessage(`آفلاین (${syncQueueCount} مورد در صف)`);
+            } else {
+                setMessage('شما آفلاین هستید');
+            }
             setIsVisible(true);
-        } else {
-            // When coming back online, check if there's anything to sync.
-            db.syncQueue.count().then(count => {
-                if (count > 0) {
+        } else { // User is online
+            if (syncQueueCount !== undefined && syncQueueCount > 0) {
+                 // The broadcast channel will handle switching to 'syncing'.
+                 // If no message is actively being processed, we show 'pending'.
+                if (status !== 'syncing' && status !== 'error') {
                     setStatus('pending');
-                    setMessage(`${count} تغییر در صف ارسال`);
+                    setMessage(`${syncQueueCount} تغییر در صف ارسال`);
                     setIsVisible(true);
-                } else {
-                    // If we were showing the "offline" badge, but now we're online
-                    // and there's nothing to sync, we can hide the badge.
-                    if (status === 'offline') {
-                        setIsVisible(false);
-                    }
                 }
-            });
+            } else {
+                // Online and queue is empty.
+                // If the last status was 'synced', we let its timer handle hiding it.
+                // Otherwise, we can hide immediately.
+                if (status !== 'synced') {
+                    setIsVisible(false);
+                }
+            }
         }
-    // 'status' is intentionally omitted to avoid re-checking count on every status change.
-    // We only care about checking when online status flips.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [isOnline]);
-
+    // `status` is included to re-evaluate visibility when status changes (e.g., from 'synced' to 'pending').
+    }, [isOnline, syncQueueCount, status]);
 
     useEffect(() => {
         const handleMessage = (event: MessageEvent<SyncStatusMessage>) => {
             const data = event.data;
             
-            // Clear any pending timer to hide the success message
-            if (successTimerRef.current) {
-                clearTimeout(successTimerRef.current);
-                successTimerRef.current = null;
+            if (hideTimerRef.current) {
+                clearTimeout(hideTimerRef.current);
+                hideTimerRef.current = null;
             }
 
             setStatus(data.status);
-            
-            if (data.status === 'syncing' && data.total !== undefined && data.processed !== undefined) {
-                setMessage(`در حال ارسال (${data.processed} از ${data.total})...`);
-                setIsVisible(true);
-            } else if (data.status === 'pending' && data.count !== undefined) {
-                setMessage(`${data.count} تغییر در صف ارسال`);
-                setIsVisible(true);
-            } else if (data.status === 'synced') {
-                setMessage('همگام‌سازی کامل شد');
-                setIsVisible(true);
-                // Set a timer to hide the component after a short delay
-                successTimerRef.current = window.setTimeout(() => {
-                    setIsVisible(false);
-                }, 2500);
-            } else if (data.status === 'error') {
-                 setMessage(data.remaining ? `خطا! ${data.remaining} آیتم باقی مانده.` : 'خطا در همگام‌سازی');
-                 setIsVisible(true);
-            } else if (data.status === 'offline') {
-                setMessage('شما آفلاین هستید');
-                setIsVisible(true);
+            setIsVisible(true); // Always show the component when a message arrives
+
+            switch(data.status) {
+                case 'syncing':
+                    setMessage(`در حال ارسال (${data.processed} از ${data.total})...`);
+                    break;
+                case 'synced':
+                    setMessage('همگام‌سازی کامل شد');
+                    hideTimerRef.current = window.setTimeout(() => {
+                        setIsVisible(false);
+                        // We reset status so if a new item appears, we don't get stuck on 'synced'
+                        setStatus('pending'); 
+                    }, 2500);
+                    break;
+                case 'error':
+                    setMessage(data.remaining ? `خطا! ${data.remaining} آیتم باقی مانده.` : 'خطا در همگام‌سازی');
+                    break;
+                // 'pending' and 'offline' are primarily handled by the other effect based on live data.
             }
         };
 
         syncStatusChannel.addEventListener('message', handleMessage);
 
-        // Initial check on mount
-        db.syncQueue.count().then(count => {
-            if (count > 0 && navigator.onLine) {
-                 handleMessage({ data: { status: 'pending', count } } as MessageEvent<SyncStatusMessage>);
-            }
-        });
-
         return () => {
             syncStatusChannel.removeEventListener('message', handleMessage);
-            if (successTimerRef.current) {
-                clearTimeout(successTimerRef.current);
+            if (hideTimerRef.current) {
+                clearTimeout(hideTimerRef.current);
             }
         };
     }, []);
@@ -140,7 +140,7 @@ const SyncStatus: React.FC = () => {
             title={config.title}
         >
             {config.icon}
-            <span className="hidden sm:inline">{message || config.title}</span>
+            <span className="hidden sm:inline">{message}</span>
         </div>
     );
 };

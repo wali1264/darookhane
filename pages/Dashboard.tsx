@@ -190,15 +190,21 @@ const ActivityLogSection: React.FC = () => {
                  if (log.actionType === 'CREATE') return { icon: <CircleDollarSign className="text-green-400" />, message: <>{userSpan} مبلغ <span className="font-bold text-white">${amount.toFixed(2)}</span> را پرداخت کرد.</> };
                 break;
             case 'User':
+                // FIX: Handle password change logs, which have a different details structure.
+                if (log.actionType === 'UPDATE' && typeof log.details.details === 'string' && log.details.details.includes('Password changed')) {
+                    return { icon: <UserPlus className="text-yellow-400" />, message: <>{userSpan} رمز عبور خود را تغییر داد.</> };
+                }
                 const username = log.details.newUser?.username || log.details.deletedUser?.username || 'نامشخص';
                 if (log.actionType === 'CREATE') return { icon: <UserPlus className="text-green-400" />, message: <>{userSpan} کاربر جدید <span className="font-bold text-white">"{username}"</span> را ایجاد کرد.</> };
-                if (log.actionType === 'UPDATE') return { icon: <UserPlus className="text-yellow-400" />, message: <>{userSpan} کاربر <span className="font-bold text-white">"{log.details.old.username}"</span> را ویرایش کرد.</> };
+                // FIX: Safely access old username to prevent crash if 'old' details are missing.
+                if (log.actionType === 'UPDATE') return { icon: <UserPlus className="text-yellow-400" />, message: <>{userSpan} کاربر <span className="font-bold text-white">"{log.details.old?.username || 'نامشخص'}"</span> را ویرایش کرد.</> };
                 if (log.actionType === 'DELETE') return { icon: <FileX className="text-red-400" />, message: <>{userSpan} کاربر <span className="font-bold text-white">"{username}"</span> را حذف کرد.</> };
                 break;
             case 'Role':
                 const roleName = log.details.newRole?.name || log.details.deletedRole?.name || 'نامشخص';
                 if (log.actionType === 'CREATE') return { icon: <ShieldPlus className="text-green-400" />, message: <>{userSpan} نقش جدید <span className="font-bold text-white">"{roleName}"</span> را ایجاد کرد.</> };
-                if (log.actionType === 'UPDATE') return { icon: <ShieldAlert className="text-yellow-400" />, message: <>{userSpan} نقش <span className="font-bold text-white">"{log.details.old.name}"</span> را ویرایش کرد.</> };
+                // FIX: Safely access old role name to prevent crash.
+                if (log.actionType === 'UPDATE') return { icon: <ShieldAlert className="text-yellow-400" />, message: <>{userSpan} نقش <span className="font-bold text-white">"{log.details.old?.name || 'نامشخص'}"</span> را ویرایش کرد.</> };
                 if (log.actionType === 'DELETE') return { icon: <FileX className="text-red-400" />, message: <>{userSpan} نقش <span className="font-bold text-white">"{roleName}"</span> را حذف کرد.</> };
                 break;
             case 'Settings':
@@ -424,8 +430,26 @@ const Dashboard: React.FC = () => {
     }));
   }, [expiryAlertThreshold]);
 
-  // Sales data would be calculated from saleInvoices table in a real scenario
-  const todaySales = '۰'; 
+  // --- Real-time Today's Sales Calculation ---
+  const todaySales = useLiveQuery(async () => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(today.getDate() + 1);
+
+    const invoices = await db.saleInvoices
+      .where('date')
+      .between(today.toISOString(), tomorrow.toISOString())
+      .toArray();
+
+    const total = invoices.reduce((sum, inv) => sum + inv.totalAmount, 0);
+
+    // Format the number to Persian locale with two decimal places for currency.
+    return new Intl.NumberFormat('fa-IR', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(total);
+  }, []);
 
   return (
     <div className="space-y-8">
@@ -435,7 +459,7 @@ const Dashboard: React.FC = () => {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        <StatCard title="فروش امروز" value={`$${todaySales}`} icon={<DollarSign size={28} className="text-white"/>} color="bg-green-500" />
+        <StatCard title="فروش امروز" value={`$${todaySales ?? '۰٫۰۰'}`} icon={<DollarSign size={28} className="text-white"/>} color="bg-green-500" />
         <StatCard title="کمبود موجودی" value={String(lowStockDrugs?.length ?? 0)} icon={<AlertTriangle size={28} className="text-white"/>} color="bg-yellow-500" />
         <StatCard title="داروهای رو به انقضا" value={String(expiringDrugs?.length ?? 0)} icon={<Clock size={28} className="text-white"/>} color="bg-red-500" />
         <StatCard title="تعداد کل تامین‌کنندگان" value={String(totalSuppliers ?? 0)} icon={<Users size={28} className="text-white"/>} color="bg-purple-500" />

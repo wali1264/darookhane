@@ -1,13 +1,14 @@
 import React from 'react';
 import { Supplier } from '../types';
 
-interface Transaction {
+export interface Transaction {
   date: string;
   description: string;
   detail?: string;
   debit: number;
   credit: number;
   balance: number;
+  isOpeningBalance?: boolean;
 }
 
 interface PrintableSupplierLedgerProps {
@@ -41,19 +42,27 @@ const PrintableSupplierLedger = React.forwardRef<HTMLDivElement, PrintableSuppli
                     <tr>
                         <th className="py-2 pr-2">تاریخ</th>
                         <th className="py-2 text-right">شرح</th>
-                        <th className="py-2 text-center">بدهکار (خرید)</th>
-                        <th className="py-2 text-center">بستانکار (پرداخت)</th>
-                        <th className="py-2 pl-2 text-left">مانده</th>
+                        <th className="py-2 text-center">خرید / افزایش بدهی (+)</th>
+                        <th className="py-2 text-center">پرداخت / کاهش بدهی (-)</th>
+                        <th className="py-2 pl-2 text-left">مانده بدهی</th>
                     </tr>
                 </thead>
                 <tbody>
                     {transactions.map((t, index) => (
-                        <tr key={index} className="border-b border-gray-700">
-                            <td className="py-2 pr-2 whitespace-nowrap">{new Date(t.date).toLocaleDateString('fa-IR')}</td>
-                            <td className="py-2 text-right">{t.description}</td>
+                        <tr key={index} className={`border-b border-gray-700 ${t.isOpeningBalance ? 'font-bold bg-gray-700/50' : ''}`}>
+                            <td className="py-2 pr-2 whitespace-nowrap">
+                                {!t.isOpeningBalance && new Date(t.date).toLocaleString('fa-IR', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                            </td>
+                            <td className="py-2 text-right">
+                                {t.description}
+                                {t.detail && <span className="block text-xs text-gray-400">{t.detail}</span>}
+                            </td>
                             <td className="py-2 text-center text-red-400">{t.debit > 0 ? `$${t.debit.toFixed(2)}` : '-'}</td>
                             <td className="py-2 text-center text-green-400">{t.credit > 0 ? `$${t.credit.toFixed(2)}` : '-'}</td>
-                            <td className="py-2 pl-2 text-left font-semibold">${t.balance.toFixed(2)}</td>
+                            <td className={`py-2 pl-2 text-left font-semibold ${t.balance < 0 ? 'text-green-400' : ''}`}>
+                                ${Math.abs(t.balance).toFixed(2)}
+                                {t.balance < 0 && <span className="text-xs"> (بستانکار)</span>}
+                            </td>
                         </tr>
                     ))}
                 </tbody>
@@ -63,7 +72,10 @@ const PrintableSupplierLedger = React.forwardRef<HTMLDivElement, PrintableSuppli
                 <div className="w-full max-w-xs text-right">
                     <div className="flex justify-between py-2 border-t-2 border-gray-500">
                         <span className="font-bold text-lg">مانده نهایی:</span>
-                        <span className={`font-bold text-lg ${finalBalance > 0 ? 'text-yellow-400' : 'text-green-400'}`}>${finalBalance.toFixed(2)}</span>
+                        <span className={`font-bold text-lg ${finalBalance > 0 ? 'text-yellow-400' : 'text-green-400'}`}>
+                           ${Math.abs(finalBalance).toFixed(2)}
+                           {finalBalance < 0 ? ' (بستانکار)' : ''}
+                        </span>
                     </div>
                 </div>
             </div>

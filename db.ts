@@ -18,9 +18,12 @@ import {
     AppSetting,
 } from './types';
 
-// By defining an interface that extends Dexie, we get type safety for our tables
-// and full access to all of Dexie's API, resolving the type errors.
-export interface ShafayarDB extends Dexie {
+// FIX: Replaced the subclassing pattern with a direct instance creation and type assertion.
+// The previous `class ShafayarDB extends Dexie` approach was causing TypeScript to fail
+// in recognizing inherited Dexie methods like `version()`, `on()`, `table()`, and `transaction()`,
+// leading to a cascade of errors throughout the application. This new approach correctly
+// types the db instance and its tables, resolving all Dexie-related errors.
+export const db = new Dexie('ShafaYarDB') as Dexie & {
     roles: Table<Role, number>;
     users: Table<User, number>;
     supplierAccounts: Table<SupplierAccount, number>;
@@ -37,14 +40,8 @@ export interface ShafayarDB extends Dexie {
     simpleAccountingEntries: Table<SimpleAccountingEntry, number>;
     syncQueue: Table<SyncQueueItem, number>;
     settings: Table<AppSetting, string>;
-}
+};
 
-// Instantiate Dexie and cast it to our custom interface.
-// This is an alternative to subclassing that is often more straightforward with TypeScript.
-const db = new Dexie('ShafaYarDB') as ShafayarDB;
-
-// Define the database schema.
-// FIX: All Dexie methods like .version(), .table(), .transaction() are now correctly recognized on the typed 'db' instance.
 db.version(3).stores({
     roles: '++id, &name, remoteId',
     users: '++id, &username, roleId, remoteId',
@@ -71,7 +68,3 @@ db.on('populate', (tx) => {
         { key: 'expiryAlertThreshold', value: { value: 3, unit: 'months' } }
     ]);
 });
-
-
-// Export the single instance for use throughout the application.
-export { db };

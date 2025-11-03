@@ -56,19 +56,20 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const login = async (username_param: string, password_plaintext: string) => {
     setIsLoading(true);
     try {
-        const { data, error } = await supabase.rpc('verify_user_credentials', {
+        // Step 1: Attempt to log in as an employee
+        const { data: employeeData, error: employeeError } = await supabase.rpc('verify_user_credentials', {
             p_username: username_param,
             p_password: password_plaintext
         });
 
-        if (error) {
-            console.error('RPC Error:', error);
+        if (employeeError) {
+            console.error('Employee Login RPC Error:', employeeError);
             showNotification('خطای داخلی در هنگام ورود.', 'error');
-            return { success: false, message: error.message };
+            return { success: false, message: employeeError.message };
         }
         
-        if (data && data.length > 0) {
-             const userData = data[0];
+        if (employeeData && employeeData.length > 0) {
+             const userData = employeeData[0];
              const userToStore: AuthenticatedUser = {
                  id: userData.id,
                  username: userData.username,
@@ -80,16 +81,47 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
              setCurrentUser(userToStore);
              setPermissions(userPermissions);
              
-             // We need to keep a copy of user info for the activity logger, but not for session management.
              sessionStorage.setItem('shafayar_user_info_for_logger', JSON.stringify({id: userToStore.id, username: userToStore.username, type: userToStore.type}));
 
              await logActivity('LOGIN', 'Authentication', userToStore.id, { message: 'User logged in successfully.' });
              showNotification('ورود موفقیت‌آمیز بود.', 'success');
              return { success: true, message: 'ورود موفقیت‌آمیز بود.' };
-        } else {
-            showNotification('نام کاربری یا رمز عبور اشتباه است.', 'error');
-            return { success: false, message: 'Invalid credentials' };
         }
+
+        // Step 2: If employee login fails, attempt to log in as a supplier
+        const { data: supplierData, error: supplierError } = await supabase.rpc('verify_supplier_credentials', {
+            p_username: username_param,
+            p_password: password_plaintext
+        });
+        
+        if (supplierError) {
+            console.error('Supplier Login RPC Error:', supplierError);
+            showNotification('خطای داخلی در هنگام ورود.', 'error');
+            return { success: false, message: supplierError.message };
+        }
+
+        if (supplierData && supplierData.length > 0) {
+            const supplierAccountData = supplierData[0];
+            const userToStore: AuthenticatedUser = {
+                id: supplierAccountData.id,
+                username: supplierAccountData.username,
+                type: 'supplier',
+                supplierId: supplierAccountData.supplier_id,
+            };
+            
+            setCurrentUser(userToStore);
+            setPermissions([]); // Suppliers have no RBAC permissions
+            
+            sessionStorage.setItem('shafayar_user_info_for_logger', JSON.stringify({id: userToStore.id, username: userToStore.username, type: userToStore.type}));
+            
+            showNotification('ورود موفقیت‌آمیز به پورتال.', 'success');
+            return { success: true, message: 'ورود موفقیت‌آمیز بود.' };
+        }
+
+        // Step 3: If both fail, it's invalid credentials
+        showNotification('نام کاربری یا رمز عبور اشتباه است.', 'error');
+        return { success: false, message: 'Invalid credentials' };
+
     } catch (error: any) {
       console.error("Login error:", error);
       showNotification('خطای داخلی رخ داد.', 'error');

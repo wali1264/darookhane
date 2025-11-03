@@ -329,7 +329,7 @@ const Sales: React.FC = () => {
                     onClose={() => setEditingInvoice(null)} 
                     onSave={() => {
                         setEditingInvoice(null);
-                        showNotification('فاکتور با موفقیت ویرایش شد.', 'success');
+                        // Notification is now handled inside EditInvoiceModal
                     }}
                 />
             )}
@@ -368,13 +368,13 @@ const InvoiceModal: React.FC<{invoice: SaleInvoice, onClose: () => void}> = ({in
 
 const EditInvoiceModal: React.FC<{ invoice: SaleInvoice; onClose: () => void; onSave: () => void; }> = ({ invoice, onClose, onSave }) => {
     const [items, setItems] = useState(invoice.items);
+    const [isSaving, setIsSaving] = useState(false);
     const drugs = useLiveQuery(() => db.drugs.toArray(), []);
     const { showNotification } = useNotification();
     const isOnline = useOnlineStatus();
 
     const updateQuantity = (drugId: number, quantity: number) => {
         const drugInStock = drugs?.find(d => d.id === drugId);
-        // For editing, available stock is current stock + what was in the original invoice
         const originalItem = invoice.items.find(i => i.drugId === drugId);
         if (!drugInStock || !originalItem) return;
 
@@ -398,24 +398,73 @@ const EditInvoiceModal: React.FC<{ invoice: SaleInvoice; onClose: () => void; on
     const totalAmount = useMemo(() => items.reduce((sum, item) => sum + item.totalPrice, 0), [items]);
 
     const handleUpdate = async () => {
-        if (!isOnline) {
+        if (!isOnline || !invoice.remoteId) {
             showNotification('ویرایش فاکتور فقط در حالت آنلاین امکان‌پذیر است.', 'error');
             return;
         }
-         try {
-            // This is a complex online-first operation now.
-            // It should be handled by a Supabase RPC in production.
-            // For now, we will revert and re-apply locally, then queue for sync. This is NOT ideal.
-            // The logic from previous versions is kept but it's now more explicit that it's online-only.
-            
-            // Placeholder for calling a Supabase RPC 'update_sale_invoice'
-            console.log("Calling placeholder for updating sale invoice on server...");
+        setIsSaving(true);
+        try {
+            const drugMap = new Map(drugs?.map(d => [d.id, d.remoteId]));
+            const newItemsPayload = [];
+            for (const item of items) {
+                const remoteDrugId = drugMap.get(item.drugId);
+                if (!remoteDrugId) {
+                    throw new Error(`داروی "${item.name}" هنوز با سرور همگام‌سازی نشده است.`);
+                }
+                newItemsPayload.push({
+                    drug_id: remoteDrugId,
+                    name: item.name,
+                    quantity: item.quantity,
+                    unit_price: item.unitPrice,
+                });
+            }
 
-            await logActivity('UPDATE', 'SaleInvoice', invoice.id!, { old: invoice, new: { ...invoice, items, totalAmount } });
+            const rpcPayload = {
+                p_invoice_id: invoice.remoteId,
+                p_new_items: newItemsPayload,
+            };
+
+            const { data, error } = await supabase.rpc('update_sale_invoice_transaction', rpcPayload);
+
+            if (error) throw error;
+            if (!data.success) throw new Error(data.message);
+
+            // On successful RPC, update local DB transactionally for instant UI feedback
+            await db.transaction('rw', db.saleInvoices, db.drugs, async () => {
+                const stockChanges = new Map<number, number>();
+                
+                // Calculate stock changes: + for old items, - for new items
+                invoice.items.forEach(oldItem => {
+                    stockChanges.set(oldItem.drugId, (stockChanges.get(oldItem.drugId) || 0) + oldItem.quantity);
+                });
+                items.forEach(newItem => {
+                    stockChanges.set(newItem.drugId, (stockChanges.get(newItem.drugId) || 0) - newItem.quantity);
+                });
+
+                // Apply stock changes
+                for (const [drugId, change] of stockChanges.entries()) {
+                    await db.drugs.where('id').equals(drugId).modify(d => {
+                        d.totalStock += change;
+                    });
+                }
+                
+                // Update the invoice itself
+                await db.saleInvoices.update(invoice.id!, {
+                    items: items,
+                    totalAmount: totalAmount,
+                });
+            });
+
+            await logActivity('UPDATE', 'SaleInvoice', invoice.remoteId, { old: invoice, new: { ...invoice, items, totalAmount } });
+            showNotification(data.message, 'success');
             onSave();
-        } catch (error) {
+        } catch (error: any) {
             console.error("Failed to update invoice:", error);
-            showNotification('خطا در ویرایش فاکتور. این عملیات در این نسخه پشتیبانی نمی‌شود.', 'error');
+            // A 403 error from Supabase often has an empty message. We provide a more helpful one.
+            const errorMessage = error.message || 'خطای دسترسی (403). نقش کاربری شما اجازه ویرایش یا حذف اقلام این فاکتور را در پایگاه داده ندارد.';
+            showNotification(`خطا در ویرایش فاکتور: ${errorMessage}`, 'error');
+        } finally {
+            setIsSaving(false);
         }
     };
 
@@ -447,7 +496,9 @@ const EditInvoiceModal: React.FC<{ invoice: SaleInvoice; onClose: () => void; on
                     </div>
                      <div className="flex justify-end gap-3">
                         <button type="button" onClick={onClose} className="px-4 py-2 bg-gray-600 rounded-lg hover:bg-gray-500">لغو</button>
-                        <button type="button" onClick={handleUpdate} className="px-4 py-2 bg-blue-600 rounded-lg hover:bg-blue-700">ذخیره تغییرات</button>
+                        <button type="button" onClick={handleUpdate} disabled={isSaving} className="px-4 py-2 bg-blue-600 rounded-lg hover:bg-blue-700 disabled:bg-gray-500">
+                            {isSaving ? 'در حال ذخیره...' : 'ذخیره تغییرات'}
+                        </button>
                     </div>
                 </div>
             </div>
