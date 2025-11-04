@@ -126,16 +126,14 @@ const AIAssistant: React.FC = () => {
         setVoiceStatus('listening');
 
         try {
-            // NOTE: The API key is temporarily hardcoded here for testing and Vercel deployment convenience as requested.
-            // For production, this should be replaced with `process.env.API_KEY`.
-            const apiKey = 'AIzaSyClpXrP1CNPc5ebgsdNk6U6mBFmim6qjm0';
+            const apiKey = process.env.API_KEY;
             if (!apiKey) {
                 showNotification('کلید API برای دستیار هوشمند تعریف نشده است.', 'error');
                 setVoiceStatus('error');
                 return;
             }
 
-            const ai = new GoogleGenAI({ apiKey: apiKey });
+            const ai = new GoogleGenAI({ apiKey });
             outputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
             inputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
             

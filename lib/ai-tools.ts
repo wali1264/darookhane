@@ -246,7 +246,6 @@ async function _getFinancialSummaryForPeriod(args: { period?: 'today' | 'this_mo
     // 1. Calculate Sales and Profit
     const saleInvoices = await db.saleInvoices.where('date').between(startISO, endISO, true, true).toArray();
     const allDrugs = await db.drugs.toArray();
-    // FIX: Defensively cast purchasePrice to a number to prevent runtime errors if data is not strictly typed.
     const drugCosts = new Map(allDrugs.map(d => [d.id!, Number(d.purchasePrice) || 0]));
 
     let totalSales = 0;
@@ -256,10 +255,9 @@ async function _getFinancialSummaryForPeriod(args: { period?: 'today' | 'this_mo
         totalSales += Number(invoice.totalAmount) || 0;
         for (const item of invoice.items) {
             const cost = drugCosts.get(item.drugId) || 0;
-            // FIX: Defensively cast quantity to a number to prevent runtime errors. This resolves the arithmetic operation error.
-            // FIX: The result of Number(item.quantity) can be NaN if the data is malformed.
-            // Coercing NaN to 0 with `|| 0` prevents it from propagating in the calculation and resolves the type error.
-            totalCostOfGoodsSold += (Number(item.quantity) || 0) * cost;
+            // FIX: Defensively cast item.quantity to a number. Data from the database might not strictly
+            // conform to the 'number' type, and this prevents runtime errors if it's null, undefined, or a non-numeric string.
+            totalCostOfGoodsSold += (Number(item.quantity) || 0) * Number(cost);
         }
     }
     const netProfit = totalSales - totalCostOfGoodsSold;

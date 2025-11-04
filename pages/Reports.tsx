@@ -116,14 +116,12 @@ const KPIs: React.FC<{ dateRange: { start: Date, end: Date } }> = ({ dateRange }
     
     const inventoryValue = useMemo(() => {
         if (!allDrugs) return 0;
-        // FIX: Ensure values are numeric to prevent NaN errors during calculation.
         return allDrugs.reduce((sum, drug) => sum + ((Number(drug.totalStock) || 0) * (Number(drug.purchasePrice) || 0)), 0);
     }, [allDrugs]);
 
     const salesAndProfit = useMemo(() => {
         if (!allSaleInvoices || !allDrugs) return { totalSales: 0, netProfit: 0 };
         
-        // FIX: Ensure purchase price is numeric when creating the costs map.
         const drugCosts = new Map(allDrugs.map(d => [d.id!, Number(d.purchasePrice) || 0]));
         
         const filteredInvoices = allSaleInvoices.filter(inv => {
@@ -135,14 +133,12 @@ const KPIs: React.FC<{ dateRange: { start: Date, end: Date } }> = ({ dateRange }
         let totalCost = 0;
 
         for (const invoice of filteredInvoices) {
-            // FIX: Defensively cast totalAmount to a number.
             totalSales += Number(invoice.totalAmount) || 0;
             for (const item of invoice.items) {
                 const cost = drugCosts.get(item.drugId) || 0;
-                // FIX: Defensively cast quantity to a number. This resolves the arithmetic operation error.
-                // FIX: The result of Number(item.quantity) can be NaN if the data is malformed.
-                // Coercing NaN to 0 with `|| 0` prevents it from propagating in the calculation and resolves the type error.
-                totalCost += (Number(item.quantity) || 0) * cost;
+                // FIX: Defensively cast item.quantity to a number. Data from the database might not strictly
+                // conform to the 'number' type, and this prevents runtime errors if it's null, undefined, or a non-numeric string.
+                totalCost += (Number(item.quantity) || 0) * Number(cost);
             }
         }
         
@@ -253,7 +249,7 @@ const InventoryStockReport: React.FC = () => {
                  <h3 className="text-xl font-bold text-white flex items-center gap-2"><Package size={20}/> گزارش کامل موجودی انبار</h3>
                  <button onClick={() => setIsPrintModalOpen(true)} className="btn-secondary print-hidden"><Printer size={16}/> چاپ</button>
             </div>
-            <div className="max-h-[80vh] overflow-y-auto">
+            <div className="max-h-[80vh] overflow-y-auto report-content-wrapper">
                 <ReportContent />
             </div>
             {isPrintModalOpen && (
@@ -342,31 +338,34 @@ const SupplierReports: React.FC<{ dateRange: { start: Date, end: Date } }> = ({ 
         let openingBalance = selectedSupplier.totalDebt - (totalPurchases - totalPayments);
         let runningBalance = openingBalance;
         
-        const allTransactions: LedgerTransaction[] = combined.map(item => {
+        const allTransactions: Transaction[] = [];
+
+        if (combined.length > 0 || openingBalance !== 0) {
+            allTransactions.push({
+                date: combined.length > 0 ? new Date(new Date(combined[0].date).getTime() - 1).toISOString() : new Date().toISOString(),
+                description: 'مانده اولیه',
+                debit: 0,
+                credit: 0,
+                balance: openingBalance,
+                isOpeningBalance: true,
+            });
+        }
+        
+        combined.forEach(item => {
             if (item.type === 'purchase') {
                 const purchase = item.data as PurchaseInvoice;
                 runningBalance += purchase.totalAmount;
-                return { date: purchase.date, type: 'purchase', description: `فاکتور خرید #${purchase.invoiceNumber}`, debit: purchase.totalAmount, credit: 0, balance: runningBalance, original: purchase };
+                allTransactions.push({ date: purchase.date, description: `فاکتور خرید #${purchase.invoiceNumber}`, debit: purchase.totalAmount, credit: 0, balance: runningBalance });
             } else {
                 const payment = item.data as Payment;
                 runningBalance -= payment.amount;
-                return { date: payment.date, type: 'payment', description: `پرداخت وجه به ${payment.recipientName}`, debit: 0, credit: payment.amount, balance: runningBalance, original: payment };
+                allTransactions.push({ date: payment.date, description: `پرداخت وجه به ${payment.recipientName}`, debit: 0, credit: payment.amount, balance: runningBalance });
             }
         });
-        
-        const transactionsInPeriod = allTransactions.filter(t => {
-            const tDate = new Date(t.date);
-            return tDate >= dateRange.start && tDate <= dateRange.end;
-        });
-        
-        const firstTransactionDate = transactionsInPeriod[0] ? new Date(transactionsInPeriod[0].date) : dateRange.start;
-        // FIX: Replaced .findLast() with a compatible alternative (.reverse().find()) to support older JavaScript targets
-        // where .findLast() is not available, ensuring broader browser compatibility.
-        const balanceBeforePeriod = [...allTransactions].reverse().find(t => new Date(t.date) < firstTransactionDate)?.balance ?? openingBalance;
 
-        return { openingBalance: balanceBeforePeriod, transactions: transactionsInPeriod, finalBalance: runningBalance };
+        return allTransactions;
 
-    }, [dateRange, selectedSupplier, supplierTransactions]);
+    }, [selectedSupplier, supplierTransactions]);
 
     return (
         <div className="bg-gray-800 p-6 rounded-lg border border-gray-700 space-y-4">
@@ -387,7 +386,7 @@ const SupplierReports: React.FC<{ dateRange: { start: Date, end: Date } }> = ({ 
                 <div className="space-y-6">
                     <div>
                         <h4 className="font-semibold text-lg text-gray-300 mb-2 border-b border-gray-700 pb-2">فاکتورهای خرید (در بازه زمانی)</h4>
-                        <div className="max-h-60 overflow-y-auto space-y-2">
+                        <div className="max-h-60 overflow-y-auto space-y-2 report-content-wrapper">
                              {invoicesInPeriod.length > 0 ? invoicesInPeriod.map(inv => (
                                 <div key={inv.id} className="flex justify-between items-center p-2 bg-gray-700/50 rounded-md">
                                     <div>
@@ -405,27 +404,9 @@ const SupplierReports: React.FC<{ dateRange: { start: Date, end: Date } }> = ({ 
 
                      {ledgerData && (
                         <div>
-                            <h4 className="font-semibold text-lg text-gray-300 mb-2 border-b border-gray-700 pb-2">دفتر کل دقیق (در بازه زمانی)</h4>
-                             <div className="max-h-[60vh] overflow-y-auto">
-                                <table className="w-full text-sm text-right">
-                                    <thead className="text-xs text-gray-400 uppercase bg-gray-800 sticky top-0">
-                                        <tr><th className="py-2">تاریخ</th><th className="py-2">شرح</th><th className="py-2">بدهکار(+)</th><th className="py-2">بستانکار(-)</th><th className="py-2">مانده</th></tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-gray-700">
-                                        <tr className="font-semibold bg-gray-900"><td className="p-2" colSpan={4}>مانده اولیه (ابتدای دوره)</td><td className="p-2 text-left">${ledgerData.openingBalance.toFixed(2)}</td></tr>
-                                        {ledgerData.transactions.map((t, i) => (
-                                            <tr key={i} className="hover:bg-gray-700/50">
-                                                <td className="p-2 whitespace-nowrap">{new Date(t.date).toLocaleDateString('fa-IR')}</td>
-                                                <td className="p-2">{t.description}</td>
-                                                <td className="p-2 text-red-400">{t.debit > 0 ? `$${t.debit.toFixed(2)}` : '-'}</td>
-                                                <td className="p-2 text-green-400">{t.credit > 0 ? `$${t.credit.toFixed(2)}` : '-'}</td>
-                                                <td className="p-2 text-left font-semibold">${t.balance.toFixed(2)}</td>
-                                            </tr>
-                                        ))}
-                                        {/* FIX: Replaced .at(-1) with array length indexing for broader browser compatibility. */}
-                                        <tr className="font-bold bg-gray-900"><td className="p-2" colSpan={4}>مانده نهایی (پایان دوره)</td><td className="p-2 text-left text-yellow-400">${(ledgerData.transactions[ledgerData.transactions.length - 1]?.balance ?? ledgerData.openingBalance).toFixed(2)}</td></tr>
-                                    </tbody>
-                                </table>
+                            <h4 className="font-semibold text-lg text-gray-300 mb-2 border-b border-gray-700 pb-2">دفتر کل دقیق</h4>
+                             <div className="max-h-[60vh] overflow-y-auto report-content-wrapper">
+                                <PrintableSupplierLedger supplier={selectedSupplier} transactions={ledgerData} />
                             </div>
                         </div>
                     )}
@@ -435,7 +416,7 @@ const SupplierReports: React.FC<{ dateRange: { start: Date, end: Date } }> = ({ 
             {invoiceToView && selectedSupplier && <PurchaseDetailsModal invoice={invoiceToView} supplierName={selectedSupplier.name} onClose={() => setInvoiceToView(null)} />}
             {isPrintModalOpen && selectedSupplier && ledgerData && (
                  <PrintPreviewModal title={`پیش‌نمایش صورت‌حساب: ${selectedSupplier.name}`} onClose={() => setIsPrintModalOpen(false)}>
-                    <PrintableSupplierLedger supplier={selectedSupplier} transactions={ledgerData.transactions} />
+                    <PrintableSupplierLedger supplier={selectedSupplier} transactions={ledgerData} />
                 </PrintPreviewModal>
             )}
              <style>{`.input-style { background-color: #374151; border: 1px solid #4b5563; color: #d1d5db; border-radius: 0.5rem; padding: 0.75rem; width: 100%; }`}</style>
@@ -450,7 +431,7 @@ const SupplierReports: React.FC<{ dateRange: { start: Date, end: Date } }> = ({ 
 const PrintPreviewModal: React.FC<{ title: string; onClose: () => void; children: React.ReactNode }> = ({ title, onClose, children }) => {
     return (
         <Modal title={title} onClose={onClose}>
-            <div className="printable-area bg-gray-900 text-white">
+            <div className="printable-area bg-white text-black p-4">
                 {children}
             </div>
             <div className="flex justify-end gap-3 pt-4 mt-4 border-t border-gray-700 print-hidden">
@@ -459,35 +440,42 @@ const PrintPreviewModal: React.FC<{ title: string; onClose: () => void; children
             </div>
             <style>{`
                 @media print {
-                    body > *:not(.printable-area) {
-                        display: none !important;
+                    @page {
+                        size: A4;
+                        margin: 1cm;
                     }
                     body {
-                        margin: 0;
-                        padding: 0;
-                        background-color: white !important;
+                        -webkit-print-color-adjust: exact !important;
+                        color-adjust: exact !important;
+                    }
+                    body * {
+                        visibility: hidden;
+                    }
+                    .printable-area, .printable-area * {
+                        visibility: visible;
                     }
                     .printable-area {
                         position: absolute;
-                        top: 0;
                         left: 0;
-                        right: 0;
+                        top: 0;
                         width: 100%;
-                        height: auto;
-                        color: black !important;
-                        background: white !important;
-                        padding: 1cm;
-                        box-sizing: border-box;
+                        font-size: 11pt;
                     }
-                     .printable-area *, .printable-area h1, .printable-area h2, .printable-area p, .printable-area span, .printable-area div {
+                    .printable-area .report-content-wrapper {
+                        max-height: none !important;
+                        overflow: visible !important;
+                    }
+                     .printable-area h3, .printable-area h4 {
                         color: black !important;
+                        border-color: #ccc !important;
                      }
                     .printable-area .bg-gray-800, .printable-area .bg-gray-700\\/50, .printable-area .bg-gray-900, .printable-area .bg-gray-700, .printable-area .bg-gray-900\\/50 {
                         background-color: transparent !important;
                         border: none !important;
                     }
-                     .printable-area .text-gray-400, .printable-area .text-gray-500 { color: #555 !important; }
-                     .printable-area .divide-y > :not([hidden]) ~ :not([hidden]) { border-color: #ddd !important; }
+                     .printable-area .text-gray-400, .printable-area .text-gray-500, .printable-area .text-gray-300 { color: #555 !important; }
+                     .printable-area .divide-y > :not([hidden]) ~ :not([hidden]), .printable-area .border-gray-700 { border-color: #ddd !important; }
+                     .printable-area .text-white { color: black !important; }
                 }
             `}</style>
         </Modal>

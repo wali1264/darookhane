@@ -18,55 +18,64 @@ const PrintableInvoice = React.forwardRef<HTMLDivElement, PrintableInvoiceProps>
   }, [settings]);
 
   return (
-    <div ref={ref} className="bg-gray-900 text-white p-6 printable-area">
-      <div className="text-center mb-6 flex flex-col items-center">
-        {pharmacyInfo.logo && <img src={pharmacyInfo.logo} alt="Pharmacy Logo" className="h-20 w-auto mb-2 object-contain" />}
-        <h1 className="text-2xl font-bold">{pharmacyInfo.name}</h1>
-        <p className="text-gray-400">فاکتور فروش</p>
+    <div ref={ref} className="bg-white text-black p-6 printable-area">
+      <div className="text-center mb-8 flex flex-col items-center border-b border-gray-200 pb-6">
+        {pharmacyInfo.logo && <img src={pharmacyInfo.logo} alt="Pharmacy Logo" className="h-24 w-auto mb-3 object-contain" />}
+        <h1 className="text-4xl font-bold text-gray-800">{pharmacyInfo.name}</h1>
+        <p className="text-gray-500 mt-1">فاکتور فروش</p>
       </div>
-      <div className="flex justify-between mb-4 text-sm">
+      <div className="flex justify-between mb-6 text-base text-gray-700">
         <div>
-          <p><span className="font-semibold">شماره فاکتور:</span> {invoice.remoteId || invoice.id}</p>
+          <p><span className="font-semibold text-gray-900">شماره فاکتور:</span> {invoice.remoteId || invoice.id}</p>
         </div>
         <div>
-          <p><span className="font-semibold">تاریخ:</span> {new Date(invoice.date).toLocaleString('fa-IR')}</p>
+          <p><span className="font-semibold text-gray-900">تاریخ:</span> {new Date(invoice.date).toLocaleString('fa-IR')}</p>
         </div>
       </div>
-      <table className="w-full text-sm text-right">
-        <thead className="border-b-2 border-gray-500">
-          <tr>
-            <th className="py-2 pr-2">#</th>
-            <th className="py-2">نام دارو</th>
-            <th className="py-2">تعداد</th>
-            <th className="py-2">قیمت واحد</th>
-            <th className="py-2 pl-2">قیمت کل</th>
+      <table className="w-full text-base text-right border-collapse">
+        <thead>
+          <tr className="bg-gray-100">
+            <th className="p-3 font-bold border text-gray-700">#</th>
+            <th className="p-3 font-bold border text-gray-700 text-right">نام دارو</th>
+            <th className="p-3 font-bold border text-gray-700 text-center">تعداد</th>
+            <th className="p-3 font-bold border text-gray-700 text-center">قیمت واحد</th>
+            <th className="p-3 font-bold border text-gray-700 text-left">قیمت کل</th>
           </tr>
         </thead>
         <tbody>
           {invoice.items.map((item, index) => (
-            <tr key={item.drugId} className="border-b border-gray-700">
-              <td className="py-2 pr-2">{index + 1}</td>
-              <td className="py-2">{item.name}</td>
-              <td className="py-2">{item.quantity}</td>
-              <td className="py-2">${item.unitPrice.toFixed(2)}</td>
-              <td className="py-2 pl-2">${item.totalPrice.toFixed(2)}</td>
+            <tr key={item.drugId} className="border-b text-gray-800">
+              <td className="p-3 border align-top">{index + 1}</td>
+              <td className="p-3 border align-top font-medium">{item.name}</td>
+              <td className="p-3 border align-top text-center">{item.quantity}</td>
+              <td className="p-3 border align-top text-center">${item.unitPrice.toFixed(2)}</td>
+              <td className="p-3 border align-top text-left">${item.totalPrice.toFixed(2)}</td>
             </tr>
           ))}
         </tbody>
       </table>
-      <div className="mt-6 flex justify-end">
+      <div className="mt-8 flex justify-end">
         <div className="w-full max-w-xs text-right">
-          <div className="flex justify-between py-2 border-t-2 border-gray-500">
-            <span className="font-bold text-lg">مبلغ کل:</span>
-            <span className="font-bold text-lg">${invoice.totalAmount.toFixed(2)}</span>
+          <div className="flex justify-between items-center p-4 bg-gray-100 rounded-lg">
+            <span className="font-bold text-xl text-gray-900">مبلغ کل:</span>
+            <span className="font-bold text-xl text-gray-900">${invoice.totalAmount.toFixed(2)}</span>
           </div>
         </div>
       </div>
-      <div className="text-center text-xs text-gray-500 mt-8">
+      <div className="text-center text-xs text-gray-500 mt-10">
         <p>از خرید شما سپاسگزاریم!</p>
+        <p>{window.location.host}</p>
       </div>
       <style>{`
         @media print {
+          @page {
+            size: A4;
+            margin: 1cm;
+          }
+          body {
+            -webkit-print-color-adjust: exact !important;
+            color-adjust: exact !important;
+          }
           body * {
             visibility: hidden;
           }
@@ -78,8 +87,10 @@ const PrintableInvoice = React.forwardRef<HTMLDivElement, PrintableInvoiceProps>
             left: 0;
             top: 0;
             width: 100%;
-            color: black !important;
-            background: white !important;
+            font-size: 12pt;
+          }
+          .bg-gray-100 {
+            background-color: #f3f4f6 !important;
           }
         }
       `}</style>
