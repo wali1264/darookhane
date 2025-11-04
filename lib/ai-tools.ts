@@ -1,10 +1,5 @@
 import { db } from '../db';
 import { FunctionDeclaration, Type } from '@google/genai';
-import { PurchaseInvoice, PurchaseInvoiceItem, Supplier } from '../types';
-
-// This is an in-memory state for the AI's current task.
-// In a more complex app, this could be moved to a global state manager or IndexedDB.
-let draftInvoice: Omit<PurchaseInvoice, 'id'> | null = null;
 
 // ===================================================================================
 // ╔╦╗╔═╗╔═╗╦  ╔═╗╔═╗╔═╗╔═╗╔╦╗╔═╗╔╗╔  Tool Declarations for Gemini
@@ -72,66 +67,33 @@ const listLowStockDrugsDeclaration: FunctionDeclaration = {
     },
 };
 
-// --- Task-Oriented Tools (Existing) ---
-
-const findSupplierByNameDeclaration: FunctionDeclaration = {
-    name: 'findSupplierByName',
-    description: 'یک نام تامین‌کننده را جستجو می‌کند تا ببیند آیا در پایگاه داده وجود دارد یا خیر. قبل از شروع یک فاکتور جدید از این ابزار استفاده کنید.',
+const getFinancialSummaryForPeriodDeclaration: FunctionDeclaration = {
+    name: 'getFinancialSummaryForPeriod',
+    description: 'یک گزارش مالی جامع برای یک دوره زمانی مشخص (امروز، این ماه، ماه گذشته) برمی‌گرداند. این گزارش شامل مجموع فروش، سود خالص حاصل از فروش و مجموع درآمد کلینیک است.',
     parameters: {
         type: Type.OBJECT,
         properties: {
-            name: { type: Type.STRING, description: 'نام تامین‌کننده‌ای که باید جستجو شود.' },
+            period: {
+                type: Type.STRING,
+                description: 'بازه زمانی گزارش. مقادیر مجاز: "today", "this_month", "last_month". پیش‌فرض "today" است.',
+                enum: ["today", "this_month", "last_month"]
+            },
         },
-        required: ['name'],
     },
 };
 
-const findDrugByNameDeclaration: FunctionDeclaration = {
-    name: 'findDrugByName',
-    description: 'یک نام دارو را جستجو می‌کند تا ببیند آیا در انبار موجود است یا خیر. قبل از افزودن یک دارو به فاکتور از این ابزار استفاده کنید.',
-    parameters: {
-        type: Type.OBJECT,
-        properties: {
-            name: { type: Type.STRING, description: 'نام دارویی که باید جستجو شود.' },
-        },
-        required: ['name'],
-    },
-};
-
-const startNewPurchaseInvoiceDeclaration: FunctionDeclaration = {
-    name: 'startNewPurchaseInvoice',
-    description: 'یک جلسه فاکتور خرید جدید را آغاز می‌کند. فقط پس از تأیید وجود تامین‌کننده با استفاده از `findSupplierByName` از این ابزار استفاده کنید. این تابع تامین‌کننده را بر اساس نام پیدا می‌کند (یا در صورت عدم وجود، یکی جدید می‌سازد) و فاکتور را برای افزودن اقلام آماده می‌کند.',
-    parameters: {
-        type: Type.OBJECT,
-        properties: {
-            supplierName: { type: Type.STRING, description: 'نام کامل تامین‌کننده. مثال: "افغان فارما"' },
-            invoiceNumber: { type: Type.STRING, description: 'شماره منحصر به فرد فاکتور خرید.' },
-        },
-        required: ['supplierName', 'invoiceNumber'],
-    },
-};
-
-const addDrugToPurchaseInvoiceDeclaration: FunctionDeclaration = {
-    name: 'addDrugToPurchaseInvoice',
-    description: 'یک قلم دارو را به فاکتور خرید فعلی اضافه می‌کند. فقط پس از تأیید وجود دارو با استفاده از `findDrugByName` از این ابزار استفاده کنید. قبل از استفاده از این تابع، باید `startNewPurchaseInvoice` فراخوانی شده باشد.',
-    parameters: {
-        type: Type.OBJECT,
-        properties: {
-            drugName: { type: Type.STRING, description: 'نام کامل دارو همانطور که در سیستم انبار ثبت شده است. مثال: "آموکسی سیلین 500mg"' },
-            quantity: { type: Type.NUMBER, description: 'تعداد داروی خریداری شده.' },
-            purchasePrice: { type: Type.NUMBER, description: 'قیمت خرید هر واحد از دارو.' },
-            lotNumber: { type: Type.STRING, description: 'شماره لات دارو که روی بسته بندی درج شده است.' },
-            expiryDate: { type: Type.STRING, description: 'تاریخ انقضای دارو در فرمت YYYY-MM-DD.' },
-        },
-        required: ['drugName', 'quantity', 'purchasePrice', 'lotNumber', 'expiryDate'],
-    },
-};
-
-const saveCurrentPurchaseInvoiceDeclaration: FunctionDeclaration = {
-    name: 'saveCurrentPurchaseInvoice',
-    description: 'مهم: این ابزار را فقط پس از کسب اجازه صریح از کاربر فراخوانی کنید. این تابع فاکتور خرید فعلی را با تمام اقلام اضافه شده در پایگاه داده ذخیره می‌کند، موجودی انبار را به‌روزرسانی کرده و بدهی تامین‌کننده را افزایش می‌دهد. پس از اجرا، جلسه فاکتور فعلی پاک می‌شود.',
+const listAllDrugsDeclaration: FunctionDeclaration = {
+    name: 'listAllDrugs',
+    description: 'لیستی از تمام داروهای موجود در انبار را به همراه موجودی کل آنها برمی‌گرداند. برای سوالات کلی در مورد موجودی انبار استفاده شود.',
     parameters: { type: Type.OBJECT, properties: {} },
 };
+
+const listAllSuppliersWithDebtDeclaration: FunctionDeclaration = {
+    name: 'listAllSuppliersWithDebt',
+    description: 'لیستی از تمام تامین‌کنندگان را به همراه بدهی کل به هر یک از آنها برمی‌گرداند.',
+    parameters: { type: Type.OBJECT, properties: {} },
+};
+
 
 export const toolDeclarations = [
     // Reporting Tools
@@ -141,18 +103,15 @@ export const toolDeclarations = [
     getTodaysSalesTotalDeclaration,
     getTodaysClinicRevenueDeclaration,
     listLowStockDrugsDeclaration,
-    // Task-Oriented Tools
-    findSupplierByNameDeclaration,
-    findDrugByNameDeclaration,
-    startNewPurchaseInvoiceDeclaration,
-    addDrugToPurchaseInvoiceDeclaration,
-    saveCurrentPurchaseInvoiceDeclaration,
+    getFinancialSummaryForPeriodDeclaration,
+    listAllDrugsDeclaration,
+    listAllSuppliersWithDebtDeclaration,
 ];
 
 
 // ===================================================================================
 // ╔═╗╔Cross_Mark╗╔═╗╦ ╦╔╦╗╔═╗  Tool Execution Logic
-// ║╣ ║ ║╠═╣║ ║ ║ ║ ║ ║  
+// ║╣ ║ ║╠═╣║ ║ ║ ║ ║ ║ ║  
 // ╚═╝╚═╝╩ ╩╚═╝ ╩ ╚═╝  
 // ===================================================================================
 
@@ -265,143 +224,77 @@ async function _listLowStockDrugs(args: { threshold?: number }) {
     return { success: true, drugs: [] };
 }
 
+async function _getFinancialSummaryForPeriod(args: { period?: 'today' | 'this_month' | 'last_month' }) {
+    const period = args.period || 'today';
+    let startDate = new Date();
+    let endDate = new Date();
 
-// --- Task-Oriented Tool Implementations (Existing) ---
+    startDate.setHours(0, 0, 0, 0);
+    endDate.setHours(23, 59, 59, 999);
 
-async function _findSupplierByName(args: { name: string }) {
-    const searchTerms = args.name.toLowerCase().split(' ').filter(Boolean);
-    if (searchTerms.length === 0) {
-        return { exists: false, matches: [] };
-    }
-    const matchingSuppliers = await db.suppliers.filter(supplier => {
-        const supplierNameLower = supplier.name.toLowerCase();
-        return searchTerms.every(term => supplierNameLower.includes(term));
-    }).limit(10).toArray();
-
-    const matches = matchingSuppliers.map(s => s.name);
-    return { exists: matches.length > 0, matches };
-}
-
-async function _findDrugByName(args: { name: string }) {
-    const searchTerms = args.name.toLowerCase().split(' ').filter(Boolean);
-    if (searchTerms.length === 0) {
-        return { exists: false, matches: [] };
-    }
-    const matchingDrugs = await db.drugs.filter(drug => {
-        const drugNameLower = drug.name.toLowerCase();
-        return searchTerms.every(term => drugNameLower.includes(term));
-    }).limit(10).toArray();
-    
-    const matches = matchingDrugs.map(d => d.name);
-    return { exists: matches.length > 0, matches };
-}
-
-async function _startNewPurchaseInvoice(args: { supplierName: string, invoiceNumber: string }) {
-    if (draftInvoice) {
-        return { success: false, message: 'یک فاکتور دیگر در حال ویرایش است. لطفاً ابتدا آن را ذخیره یا لغو کنید.' };
+    if (period === 'this_month') {
+        startDate.setDate(1);
+    } else if (period === 'last_month') {
+        endDate = new Date(startDate.getFullYear(), startDate.getMonth(), 0);
+        startDate = new Date(endDate.getFullYear(), endDate.getMonth(), 1);
+        endDate.setHours(23, 59, 59, 999);
     }
 
-    let supplier = await db.suppliers.where('name').equalsIgnoreCase(args.supplierName).first();
-    if (!supplier) {
-        const newSupplierId = await db.suppliers.add({ name: args.supplierName, totalDebt: 0 });
-        supplier = await db.suppliers.get(newSupplierId);
-        if (!supplier) return { success: false, message: 'خطا در ایجاد تامین‌کننده جدید.' };
-    }
+    const startISO = startDate.toISOString();
+    const endISO = endDate.toISOString();
 
-    draftInvoice = {
-        invoiceNumber: args.invoiceNumber,
-        supplierId: supplier.id!,
-        date: new Date().toISOString(),
-        items: [],
-        totalAmount: 0,
-        amountPaid: 0,
+    // 1. Calculate Sales and Profit
+    const saleInvoices = await db.saleInvoices.where('date').between(startISO, endISO, true, true).toArray();
+    const allDrugs = await db.drugs.toArray();
+    // FIX: Defensively cast purchasePrice to a number to prevent runtime errors if data is not strictly typed.
+    const drugCosts = new Map(allDrugs.map(d => [d.id!, Number(d.purchasePrice) || 0]));
+
+    let totalSales = 0;
+    let totalCostOfGoodsSold = 0;
+
+    for (const invoice of saleInvoices) {
+        totalSales += Number(invoice.totalAmount) || 0;
+        for (const item of invoice.items) {
+            const cost = drugCosts.get(item.drugId) || 0;
+            // FIX: Defensively cast quantity to a number to prevent runtime errors. This resolves the arithmetic operation error.
+            // FIX: The result of Number(item.quantity) can be NaN if the data is malformed.
+            // Coercing NaN to 0 with `|| 0` prevents it from propagating in the calculation and resolves the type error.
+            totalCostOfGoodsSold += (Number(item.quantity) || 0) * cost;
+        }
+    }
+    const netProfit = totalSales - totalCostOfGoodsSold;
+
+    // 2. Calculate Clinic Revenue
+    const clinicTransactions = await db.clinicTransactions.where('date').between(startISO, endISO, true, true).toArray();
+    const totalClinicRevenue = clinicTransactions.reduce((sum, trans) => sum + trans.amount, 0);
+
+    return {
+        success: true,
+        period,
+        totalSales,
+        netProfit,
+        totalClinicRevenue,
+        saleInvoicesCount: saleInvoices.length,
+        clinicTransactionsCount: clinicTransactions.length
     };
-
-    return { success: true, message: `فاکتور خرید برای "${supplier.name}" با شماره "${args.invoiceNumber}" با موفقیت آغاز شد. اکنون می‌توانید اقلام را اضافه کنید.` };
 }
 
-async function _addDrugToPurchaseInvoice(args: { drugName: string, quantity: number, purchasePrice: number, lotNumber: string, expiryDate: string }) {
-    if (!draftInvoice) {
-        return { success: false, message: 'هیچ فاکتور خریدی فعال نیست. لطفاً ابتدا با دستور `startNewPurchaseInvoice` یک فاکتور جدید را شروع کنید.' };
+async function _listAllDrugs() {
+    const drugs = await db.drugs.toArray();
+    if (drugs.length > 0) {
+        const result = drugs.map(d => ({ name: d.name, stock: d.totalStock }));
+        return { success: true, drugs: result };
     }
-
-    const drug = await db.drugs.where('name').equalsIgnoreCase(args.drugName).first();
-    if (!drug) {
-        return { success: false, message: `دارویی با نام "${args.drugName}" یافت نشد. لطفاً ابتدا آن را در سیستم انبارداری ثبت کنید.` };
-    }
-    
-    const expiryRegex = /^\d{4}-\d{2}-\d{2}$/;
-    if (!expiryRegex.test(args.expiryDate)) {
-        return { success: false, message: `فرمت تاریخ انقضا نامعتبر است. لطفاً از فرمت YYYY-MM-DD استفاده کنید.` };
-    }
-
-    const newItem: PurchaseInvoiceItem = {
-        drugId: drug.id!,
-        name: drug.name,
-        quantity: args.quantity,
-        purchasePrice: args.purchasePrice,
-        lotNumber: args.lotNumber,
-        expiryDate: args.expiryDate,
-    };
-    
-    draftInvoice.items.push(newItem);
-    
-    return { success: true, message: `"${args.quantity}" عدد "${args.drugName}" با موفقیت به فاکتور اضافه شد.` };
+    return { success: true, drugs: [] };
 }
 
-
-async function _saveCurrentPurchaseInvoice() {
-    if (!draftInvoice) {
-        return { success: false, message: 'هیچ فاکتوری برای ذخیره وجود ندارد.' };
+async function _listAllSuppliersWithDebt() {
+    const suppliers = await db.suppliers.toArray();
+    if (suppliers.length > 0) {
+        const result = suppliers.map(s => ({ name: s.name, debt: s.totalDebt }));
+        return { success: true, suppliers: result };
     }
-    if (draftInvoice.items.length === 0) {
-        return { success: false, message: 'فاکتور هیچ آیتمی ندارد. لطفاً ابتدا اقلام را اضافه کنید.' };
-    }
-
-    const totalAmount = draftInvoice.items.reduce((sum, item) => sum + item.quantity * item.purchasePrice, 0);
-    const invoiceToSave = { ...draftInvoice, totalAmount };
-    const supplierId = draftInvoice.supplierId;
-
-    try {
-        await db.transaction('rw', db.purchaseInvoices, db.drugs, db.drugBatches, db.suppliers, async () => {
-            await db.purchaseInvoices.add(invoiceToSave as PurchaseInvoice);
-
-            for (const item of invoiceToSave.items) {
-                const existingBatch = await db.drugBatches.where({ drugId: item.drugId, lotNumber: item.lotNumber }).first();
-
-                if (existingBatch) {
-                    await db.drugBatches.update(existingBatch.id!, {
-                        quantityInStock: existingBatch.quantityInStock + item.quantity
-                    });
-                } else {
-                    await db.drugBatches.add({
-                        drugId: item.drugId,
-                        lotNumber: item.lotNumber,
-                        expiryDate: item.expiryDate,
-                        quantityInStock: item.quantity,
-                        purchasePrice: item.purchasePrice,
-                    });
-                }
-                
-                await db.drugs.where('id').equals(item.drugId).modify(drug => {
-                    drug.totalStock += item.quantity;
-                    drug.purchasePrice = item.purchasePrice; // Update default purchase price
-                });
-            }
-
-            await db.suppliers.where('id').equals(supplierId).modify(supplier => {
-                supplier.totalDebt += totalAmount;
-            });
-        });
-        
-        draftInvoice = null; // Clear the draft invoice after successful save
-        
-        return { success: true, message: `فاکتور با موفقیت ذخیره شد. مبلغ کل ${totalAmount.toFixed(2)} دلار به بدهی تامین‌کننده اضافه گردید.` };
-
-    } catch (error) {
-        console.error("Failed to save purchase invoice via AI tool:", error);
-        return { success: false, message: `خطا در ذخیره سازی فاکتور: ${error}` };
-    }
+    return { success: true, suppliers: [] };
 }
 
 
@@ -420,17 +313,12 @@ export async function executeTool(name: string, args: any) {
             return await _getTodaysClinicRevenue();
         case 'listLowStockDrugs':
             return await _listLowStockDrugs(args);
-        // Task-oriented
-        case 'findSupplierByName':
-            return await _findSupplierByName(args);
-        case 'findDrugByName':
-            return await _findDrugByName(args);
-        case 'startNewPurchaseInvoice':
-            return await _startNewPurchaseInvoice(args);
-        case 'addDrugToPurchaseInvoice':
-            return await _addDrugToPurchaseInvoice(args);
-        case 'saveCurrentPurchaseInvoice':
-            return await _saveCurrentPurchaseInvoice();
+        case 'getFinancialSummaryForPeriod':
+            return await _getFinancialSummaryForPeriod(args);
+        case 'listAllDrugs':
+            return await _listAllDrugs();
+        case 'listAllSuppliersWithDebt':
+            return await _listAllSuppliersWithDebt();
         default:
             throw new Error(`ابزار ناشناخته: ${name}`);
     }

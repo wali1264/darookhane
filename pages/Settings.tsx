@@ -3,7 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
 import { User, Role, Permission, PERMISSIONS, Supplier, SupplierAccount, ExpiryThreshold, AppSetting } from '../types';
 import Modal from '../components/Modal';
-import { Plus, Edit, Trash2, Users, Shield, BookHeart, DatabaseBackup, UploadCloud, AlertTriangle, Bell, Save } from 'lucide-react';
+import { Plus, Edit, Trash2, Users, Shield, BookHeart, DatabaseBackup, UploadCloud, AlertTriangle, Bell, Save, Store, Image, Trash } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useNotification } from '../contexts/NotificationContext';
 import { logActivity } from '../lib/activityLogger';
@@ -23,24 +23,38 @@ const TabButton: React.FC<{ active: boolean; onClick: () => void; icon: React.Re
 );
 
 const Settings: React.FC = () => {
-    const { hasPermission } = useAuth();
+    const { hasPermission, currentUser } = useAuth();
     const availableTabs = useMemo(() => {
-        const tabs: ('users' | 'roles' | 'portal' | 'backup' | 'alerts')[] = [];
+        const tabs: ('profile' | 'users' | 'roles' | 'portal' | 'backup' | 'alerts')[] = [];
+        const isSuperAdmin = currentUser?.username === 'admin';
+
+        // The new tab was not showing because the 'settings:profile:manage' permission,
+        // while defined in the code, was not present in the admin role's permission list in the database.
+        // This check ensures the admin *always* sees this tab.
+        if (hasPermission('settings:profile:manage') || isSuperAdmin) tabs.push('profile');
         if (hasPermission('settings:users:view')) tabs.push('users');
         if (hasPermission('settings:roles:view')) tabs.push('roles');
         if (hasPermission('settings:portal:manage')) tabs.push('portal');
         if (hasPermission('settings:backup:manage')) tabs.push('backup');
         if (hasPermission('settings:alerts:manage')) tabs.push('alerts');
         return tabs;
-    }, [hasPermission]);
+    }, [hasPermission, currentUser]);
 
-    const [activeTab, setActiveTab] = useState<('users' | 'roles' | 'portal' | 'backup' | 'alerts') | null>(availableTabs[0] || null);
+    const [activeTab, setActiveTab] = useState<(typeof availableTabs)[number] | null>(null);
+
+    // This effect correctly sets the initial active tab and handles cases where tabs appear after the initial render (e.g., after login).
+    useEffect(() => {
+        if (availableTabs.length > 0 && !activeTab) {
+            setActiveTab(availableTabs[0]);
+        }
+    }, [availableTabs, activeTab]);
 
     return (
         <div className="space-y-6">
             <div className="flex justify-between items-center">
                 <h2 className="text-3xl font-bold text-white">تنظیمات</h2>
                 <div className="flex items-center gap-3 p-1 bg-gray-800 rounded-lg">
+                    {availableTabs.includes('profile') && <TabButton active={activeTab === 'profile'} onClick={() => setActiveTab('profile')} icon={<Store size={18} />} text="مشخصات داروخانه" />}
                     {availableTabs.includes('users') && <TabButton active={activeTab === 'users'} onClick={() => setActiveTab('users')} icon={<Users size={18} />} text="مدیریت کاربران" />}
                     {availableTabs.includes('roles') && <TabButton active={activeTab === 'roles'} onClick={() => setActiveTab('roles')} icon={<Shield size={18} />} text="مدیریت نقش‌ها" />}
                     {availableTabs.includes('portal') && <TabButton active={activeTab === 'portal'} onClick={() => setActiveTab('portal')} icon={<BookHeart size={18} />} text="پورتال تامین‌کنندگان" />}
@@ -48,6 +62,7 @@ const Settings: React.FC = () => {
                     {availableTabs.includes('alerts') && <TabButton active={activeTab === 'alerts'} onClick={() => setActiveTab('alerts')} icon={<Bell size={18} />} text="مدیریت هشدارها" />}
                 </div>
             </div>
+            {activeTab === 'profile' && <PharmacyProfileManagement />}
             {activeTab === 'users' && <UserManagement />}
             {activeTab === 'roles' && <RoleManagement />}
             {activeTab === 'portal' && <SupplierPortalManagement />}
@@ -57,6 +72,120 @@ const Settings: React.FC = () => {
         </div>
     );
 };
+
+// Pharmacy Profile Management
+const PharmacyProfileManagement: React.FC = () => {
+    const { showNotification } = useNotification();
+    const dbSettings = useLiveQuery(() => db.settings.toArray());
+
+    const [pharmacyName, setPharmacyName] = useState('');
+    const [pharmacyLogo, setPharmacyLogo] = useState<string | null>(null);
+    const [isSaving, setIsSaving] = useState(false);
+    const fileInputRef = useRef<HTMLInputElement>(null);
+
+    useEffect(() => {
+        if (dbSettings) {
+            const nameSetting = dbSettings.find(s => s.key === 'pharmacyName');
+            if (nameSetting) setPharmacyName(nameSetting.value as string);
+            
+            const logoSetting = dbSettings.find(s => s.key === 'pharmacyLogo');
+            if (logoSetting) setPharmacyLogo(logoSetting.value as string);
+        }
+    }, [dbSettings]);
+
+    const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (file) {
+            if (file.size > 512 * 1024) { // 512KB limit
+                showNotification('حجم فایل لوگو باید کمتر از 512 کیلوبایت باشد.', 'error');
+                return;
+            }
+            const reader = new FileReader();
+            reader.onload = () => {
+                setPharmacyLogo(reader.result as string);
+            };
+            reader.readAsDataURL(file);
+        }
+    };
+
+    const handleSave = async () => {
+        setIsSaving(true);
+        try {
+            const settingsToSave: AppSetting[] = [
+                { key: 'pharmacyName', value: pharmacyName.trim() || 'شفا-یار' },
+                { key: 'pharmacyLogo', value: pharmacyLogo || '' }
+            ];
+            await db.settings.bulkPut(settingsToSave);
+            showNotification('مشخصات داروخانه با موفقیت ذخیره شد.', 'success');
+        } catch (error) {
+            console.error("Failed to save pharmacy profile:", error);
+            showNotification('خطا در ذخیره مشخصات.', 'error');
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
+    return (
+        <form onSubmit={(e) => { e.preventDefault(); handleSave(); }} className="bg-gray-800 rounded-lg p-6 border border-gray-700 max-w-2xl mx-auto space-y-8">
+            <div>
+                <h3 className="text-xl font-bold text-white mb-2">نام داروخانه</h3>
+                <p className="text-gray-400 text-sm mb-4">
+                    این نام در تمام بخش‌های برنامه و اسناد چاپی نمایش داده خواهد شد.
+                </p>
+                <input
+                    type="text"
+                    value={pharmacyName}
+                    onChange={(e) => setPharmacyName(e.target.value)}
+                    className="input-style w-full"
+                    placeholder="نام داروخانه خود را وارد کنید"
+                />
+            </div>
+
+            <div className="border-t border-gray-700 pt-8">
+                <h3 className="text-xl font-bold text-white mb-4">لوگوی داروخانه</h3>
+                <div className="flex items-center gap-6">
+                    <div className="w-32 h-32 bg-gray-700/50 rounded-lg flex items-center justify-center border border-gray-600">
+                        {pharmacyLogo ? (
+                            <img src={pharmacyLogo} alt="پیش‌نمایش لوگو" className="w-full h-full object-contain rounded-lg" />
+                        ) : (
+                            <Image size={40} className="text-gray-500" />
+                        )}
+                    </div>
+                    <div className="flex-1 space-y-3">
+                        <input type="file" accept="image/png, image/jpeg, image/svg+xml" ref={fileInputRef} onChange={handleLogoUpload} className="hidden" />
+                        <button type="button" onClick={() => fileInputRef.current?.click()} className="btn-secondary w-full">تغییر لوگو</button>
+                        <button type="button" onClick={() => setPharmacyLogo(null)} className="btn-danger w-full">
+                            <Trash size={16} className="ml-2" />
+                            حذف لوگو
+                        </button>
+                        <p className="text-xs text-gray-500">فایل‌های PNG, JPG یا SVG با حجم کمتر از ۵۱۲ کیلوبایت.</p>
+                    </div>
+                </div>
+            </div>
+
+            <div className="flex justify-end pt-6 border-t border-gray-700">
+                <button
+                    type="submit"
+                    disabled={isSaving}
+                    className="btn-primary flex items-center justify-center gap-2"
+                >
+                    <Save size={18} />
+                    {isSaving ? "در حال ذخیره..." : "ذخیره تغییرات"}
+                </button>
+            </div>
+             <style>{`
+                .input-style { background-color: #1f2937; border: 1px solid #4b5563; color: #d1d5db; border-radius: 0.5rem; padding: 0.75rem; }
+                .btn-primary { padding: 0.6rem 1.5rem; background-color: #2563eb; color: white; border-radius: 0.5rem; font-size: 0.875rem; transition: background-color 0.2s; }
+                .btn-primary:hover { background-color: #1d4ed8; }
+                .btn-secondary { display: flex; align-items: center; justify-content: center; padding: 0.6rem 1.5rem; background-color: #4b5563; color: white; border-radius: 0.5rem; font-size: 0.875rem; transition: background-color 0.2s; }
+                .btn-secondary:hover { background-color: #6b7280; }
+                .btn-danger { display: flex; align-items: center; justify-content: center; padding: 0.6rem 1.5rem; background-color: transparent; color: #f87171; border: 1px solid #f87171; border-radius: 0.5rem; font-size: 0.875rem; transition: all 0.2s; }
+                .btn-danger:hover { background-color: #f87171; color: white; }
+            `}</style>
+        </form>
+    );
+};
+
 
 // Alert Management Section
 const AlertManagement: React.FC = () => {

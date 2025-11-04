@@ -163,7 +163,7 @@ const Purchases: React.FC = () => {
                 <EditPurchaseInvoiceModal 
                     invoice={editingInvoice} 
                     onClose={() => setEditingInvoice(null)} 
-                    onSave={() => setEditingInvoice(null)}
+                    onSaveSuccess={handleSaveSuccess}
                 />
             )}
         </div>
@@ -183,9 +183,7 @@ const PrintModal: React.FC<{ invoice: PurchaseInvoice, supplierName: string, onC
                         <span>چاپ</span>
                     </button>
                 </div>
-                 <style>{`
-                    @media print { .print-hidden { display: none; } }
-                 `}</style>
+                 <style>{`@media print { .print-hidden { display: none; } }`}</style>
             </div>
         </Modal>
     );
@@ -219,8 +217,8 @@ const validateExpiry = (value: string): boolean => {
         monthStr = match[1] || match[4];
         yearStr = match[2] || match[3];
     } else if (/^\d{5,6}$/.test(trimmedValue)) {
-        monthStr = trimmedValue.slice(0, -4);
-        yearStr = trimmedValue.slice(-4);
+        monthStr = value.slice(0, -4);
+        yearStr = value.slice(-4);
     }
 
     if (monthStr && yearStr) {
@@ -495,16 +493,17 @@ const PurchaseFormModal: React.FC<{ onClose: () => void; onSaveSuccess: () => vo
 };
 
 
-const EditPurchaseInvoiceModal: React.FC<{ invoice: PurchaseInvoice; onClose: () => void; onSave: () => void; }> = ({ invoice, onClose, onSave }) => {
+const EditPurchaseInvoiceModal: React.FC<{ invoice: PurchaseInvoice; onClose: () => void; onSaveSuccess: () => void; }> = ({ invoice, onClose, onSaveSuccess }) => {
     const [supplierId, setSupplierId] = useState(invoice.supplierId);
     const [invoiceNumber, setInvoiceNumber] = useState(invoice.invoiceNumber);
     const [date, setDate] = useState(invoice.date.split('T')[0]);
     const [items, setItems] = useState<PurchaseItemData[]>(invoice.items.map(i => ({...i, quantity: i.quantity, purchasePrice: i.purchasePrice, isExpiryDateValid: true})));
     const { showNotification } = useNotification();
+    const [isSaving, setIsSaving] = useState(false);
     
     // The rest of the state and logic for add/remove/update items
     const [searchTerm, setSearchTerm] = useState('');
-    const suppliers = useLiveQuery(() => db.suppliers.orderBy('name').toArray(), []);
+    const suppliers = useLiveQuery(() => db.suppliers.orderBy('name').toArray());
     const drugs = useLiveQuery(() => db.drugs.toArray(), []);
     const searchResults = useMemo(() => {
         if (!searchTerm || !drugs) return [];
@@ -597,7 +596,68 @@ const EditPurchaseInvoiceModal: React.FC<{ invoice: PurchaseInvoice; onClose: ()
 
     const handleUpdate = async (e: FormEvent) => {
         e.preventDefault();
-        showNotification('ویرایش فاکتور خرید در این نسخه پشتیبانی نمی‌شود.', 'info');
+        setIsSaving(true);
+        if (!supplierId || items.length === 0 || !invoiceNumber.trim()) {
+            showNotification('لطفاً تمام اطلاعات اصلی فاکتور را تکمیل کنید.', 'error');
+            setIsSaving(false);
+            return;
+        }
+        if (items.some(item => !item.isExpiryDateValid || !item.lotNumber || !item.expiryDate || item.quantity === '' || item.purchasePrice === '' || Number(item.quantity) <= 0 || Number(item.purchasePrice) < 0)) {
+            showNotification('لطفاً تمام فیلدهای اقلام فاکتور را به درستی وارد کنید.', 'error');
+            setIsSaving(false);
+            return;
+        }
+        
+        try {
+            const supplier = suppliers?.find(s => s.id === supplierId);
+            if (!supplier?.remoteId) throw new Error("تامین‌کننده انتخاب شده معتبر نیست.");
+
+            const payloadItems = [];
+            for (const item of items) {
+                const drug = drugs?.find(d => d.id === item.drugId);
+                if (!drug?.remoteId) throw new Error(`داروی "${item.name}" معتبر نیست.`);
+                payloadItems.push({
+                    drug_id: drug.remoteId,
+                    name: item.name,
+                    quantity: Number(item.quantity),
+                    purchase_price: Number(item.purchasePrice),
+                    lot_number: item.lotNumber,
+                    expiry_date: item.expiryDate,
+                });
+            }
+
+            const payload = {
+                p_invoice_id: invoice.remoteId!,
+                p_new_supplier_id: supplier.remoteId,
+                p_new_invoice_number: invoiceNumber.trim(),
+                p_new_date: date,
+                p_new_items: payloadItems,
+            };
+
+            const { data, error } = await supabase.rpc('update_purchase_invoice_transaction', payload);
+
+            if (error) throw error;
+            if (!data.success) throw new Error(data.message);
+
+            // Optimistic Update for Supplier Debt
+            const debtChange = totalAmount - invoice.totalAmount;
+            if (debtChange !== 0 && supplier.id) {
+                await db.suppliers.where('id').equals(supplier.id).modify(s => {
+                    s.totalDebt += debtChange;
+                });
+            }
+
+            await logActivity('UPDATE', 'PurchaseInvoice', invoice.remoteId!, { old: invoice, new: { ...invoice, items, supplierId, date, invoiceNumber } });
+            showNotification(data.message, 'success');
+            onSaveSuccess(); // This will refetch data in the parent and close the modal
+            onClose();
+
+        } catch (error: any) {
+            console.error("Failed to update purchase invoice:", error);
+            showNotification(error.message || 'خطا در ویرایش فاکتور خرید.', 'error');
+        } finally {
+            setIsSaving(false);
+        }
     };
 
     return (
@@ -639,7 +699,9 @@ const EditPurchaseInvoiceModal: React.FC<{ invoice: PurchaseInvoice; onClose: ()
                      <p className="text-lg font-bold">مجموع کل: <span className="text-green-400">${totalAmount.toFixed(2)}</span></p>
                     <div className="flex justify-end gap-3">
                         <button type="button" onClick={onClose} className="px-4 py-2 bg-gray-600 rounded-lg hover:bg-gray-500">لغو</button>
-                        <button type="submit" className="px-4 py-2 bg-blue-600 rounded-lg hover:bg-blue-700">ذخیره تغییرات</button>
+                        <button type="submit" disabled={isSaving} className="px-4 py-2 bg-blue-600 rounded-lg hover:bg-blue-700 disabled:bg-gray-500">
+                            {isSaving ? 'در حال ذخیره...' : 'ذخیره تغییرات'}
+                        </button>
                     </div>
                 </div>
             </form>

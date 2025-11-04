@@ -142,6 +142,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const hasPermission = (permission: Permission) => {
+    // Grant all permissions to the special 'admin' user, bypassing the role check.
+    if (currentUser?.type === 'employee' && currentUser.username.toLowerCase() === 'admin') {
+      return true;
+    }
     return permissions.includes(permission);
   };
   

@@ -65,6 +65,8 @@ db.version(3).stores({
 db.on('populate', (tx) => {
     tx.table('settings').bulkAdd([
         { key: 'lowStockThreshold', value: 10 },
-        { key: 'expiryAlertThreshold', value: { value: 3, unit: 'months' } }
+        { key: 'expiryAlertThreshold', value: { value: 3, unit: 'months' } },
+        { key: 'pharmacyName', value: 'شفا-یار' },
+        { key: 'pharmacyLogo', value: '' }
     ]);
 });

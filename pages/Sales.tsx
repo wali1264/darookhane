@@ -2,7 +2,7 @@ import React, { useState, useMemo, useRef } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
 import { Drug, SaleItem, SaleInvoice } from '../types';
-import { Search, X, Plus, Minus, Printer, Edit, History } from 'lucide-react';
+import { Search, X, Plus, Minus, Printer, Edit, History, Filter, XCircle } from 'lucide-react';
 import Modal from '../components/Modal';
 import PrintableInvoice from '../components/PrintableInvoice';
 import { useVoiceInput } from '../hooks/useVoiceInput';
@@ -13,18 +13,45 @@ import { logActivity } from '../lib/activityLogger';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { processSyncQueue } from '../lib/syncService';
 import { supabase } from '../lib/supabaseClient';
+import { parseJalaliDate } from '../lib/dateConverter';
+
+// Helper to get ISO date strings for filtering
+const getISODateForFilter = (date: Date) => {
+    return date.toISOString();
+};
 
 const Sales: React.FC = () => {
     const [searchTerm, setSearchTerm] = useState('');
     const [cart, setCart] = useState<Omit<SaleItem, 'deductions'>[]>([]);
     const [invoiceToPrint, setInvoiceToPrint] = useState<SaleInvoice | null>(null);
     const [editingInvoice, setEditingInvoice] = useState<SaleInvoice | null>(null);
+    const [dateFilter, setDateFilter] = useState<{ start: string | null, end: string | null }>({ start: null, end: null });
+    const [customDateInputs, setCustomDateInputs] = useState({ start: '', end: '' });
+
     const { hasPermission } = useAuth();
     const { showNotification } = useNotification();
     const isOnline = useOnlineStatus();
 
     const drugs = useLiveQuery(() => db.drugs.toArray(), []);
-    const recentInvoices = useLiveQuery(() => db.saleInvoices.orderBy('id').reverse().limit(5).toArray(), []);
+    
+    const recentInvoices = useLiveQuery(async () => {
+        if (dateFilter.start && dateFilter.end) {
+            // Filtered view: get all within the date range, sorted by date descending
+            return await db.saleInvoices
+                .where('date')
+                .between(dateFilter.start, dateFilter.end, true, true)
+                .reverse()
+                .sortBy('date');
+        } else {
+            // Default view: get the 100 most recent invoices
+            return await db.saleInvoices
+                .orderBy('date')
+                .reverse()
+                .limit(100)
+                .toArray();
+        }
+    }, [dateFilter]);
+
 
     const handleVoiceTranscript = (transcript: string) => {
         setSearchTerm(transcript);
@@ -216,6 +243,45 @@ const Sales: React.FC = () => {
     const handleOpenEditModal = (invoice: SaleInvoice) => {
         setEditingInvoice(invoice);
     };
+    
+    // --- Date Filter Handlers ---
+    const applyCustomDateFilter = () => {
+        const start = customDateInputs.start ? parseJalaliDate(customDateInputs.start) : null;
+        const end = customDateInputs.end ? parseJalaliDate(customDateInputs.end) : null;
+
+        if (start && end && start > end) {
+            showNotification('تاریخ شروع نمی‌تواند بعد از تاریخ پایان باشد.', 'error');
+            return;
+        }
+
+        const startISO = start ? getISODateForFilter(start) : null;
+        // To include the whole end day, set time to 23:59:59
+        if (end) end.setHours(23, 59, 59, 999);
+        const endISO = end ? getISODateForFilter(end) : null;
+
+        setDateFilter({ start: startISO, end: endISO || new Date().toISOString() });
+    };
+
+    const setQuickFilter = (period: 'today' | 'week' | 'month') => {
+        const end = new Date();
+        const start = new Date();
+        end.setHours(23, 59, 59, 999);
+        start.setHours(0, 0, 0, 0);
+
+        if (period === 'week') {
+            start.setDate(start.getDate() - start.getDay()); // Assuming week starts on Sunday
+        } else if (period === 'month') {
+            start.setDate(1);
+        }
+        
+        setDateFilter({ start: getISODateForFilter(start), end: getISODateForFilter(end) });
+        setCustomDateInputs({start: '', end: ''});
+    };
+
+    const clearFilter = () => {
+        setDateFilter({ start: null, end: null });
+        setCustomDateInputs({start: '', end: ''});
+    };
 
     return (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-full">
@@ -248,11 +314,24 @@ const Sales: React.FC = () => {
                 </div>
                  {/* Recent Invoices */}
                 <div className="bg-gray-800 p-6 rounded-lg border border-gray-700 flex flex-col">
-                    <h3 className="text-xl font-bold mb-4 text-white border-b border-gray-600 pb-3 flex items-center gap-2">
-                        <History size={20} />
-                        فاکتورهای اخیر
-                    </h3>
-                    <div className="flex-grow space-y-2 overflow-y-auto">
+                    <div className="border-b border-gray-600 pb-3 mb-3">
+                        <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                            <History size={20} />
+                            فاکتورهای اخیر
+                        </h3>
+                        <div className="flex flex-wrap items-center gap-2 mt-3 text-sm">
+                            <Filter size={16} className="text-gray-400"/>
+                            <button onClick={() => setQuickFilter('today')} className="btn-filter">امروز</button>
+                            <button onClick={() => setQuickFilter('week')} className="btn-filter">این هفته</button>
+                            <button onClick={() => setQuickFilter('month')} className="btn-filter">این ماه</button>
+                            <input type="text" placeholder="از YYYY/MM/DD" value={customDateInputs.start} onChange={e => setCustomDateInputs(p => ({...p, start: e.target.value}))} onBlur={applyCustomDateFilter} className="input-date"/>
+                            <input type="text" placeholder="تا YYYY/MM/DD" value={customDateInputs.end} onChange={e => setCustomDateInputs(p => ({...p, end: e.target.value}))} onBlur={applyCustomDateFilter} className="input-date"/>
+                            {(dateFilter.start || dateFilter.end) && (
+                                <button onClick={clearFilter} className="flex items-center gap-1 text-red-400 hover:text-red-300 text-xs p-1 rounded-full bg-red-500/10 hover:bg-red-500/20"><XCircle size={14}/>پاک کردن فیلتر</button>
+                            )}
+                        </div>
+                    </div>
+                    <div className="space-y-2 overflow-y-auto pr-2 -mr-2 max-h-96">
                         {recentInvoices?.map(inv => (
                             <div key={inv.id} className="p-3 bg-gray-700/60 rounded-lg flex justify-between items-center">
                                 <div>
@@ -277,6 +356,9 @@ const Sales: React.FC = () => {
                                 </div>
                             </div>
                         ))}
+                         {recentInvoices?.length === 0 && (
+                            <p className="text-center text-gray-500 py-8">هیچ فاکتوری برای این بازه زمانی یافت نشد.</p>
+                        )}
                     </div>
                 </div>
             </div>
@@ -333,6 +415,11 @@ const Sales: React.FC = () => {
                     }}
                 />
             )}
+             <style>{`
+                .btn-filter { font-size: 0.8rem; padding: 0.3rem 0.8rem; border-radius: 0.5rem; background-color: #374151; color: #d1d5db; transition: background-color 0.2s; }
+                .btn-filter:hover { background-color: #4b5563; }
+                .input-date { background-color: #374151; border: 1px solid #4b5563; color: #d1d5db; border-radius: 0.5rem; padding: 0.25rem; font-size: 0.8rem; width: 110px; text-align: center; }
+             `}</style>
         </div>
     );
 };
@@ -416,6 +503,7 @@ const EditInvoiceModal: React.FC<{ invoice: SaleInvoice; onClose: () => void; on
                     name: item.name,
                     quantity: item.quantity,
                     unit_price: item.unitPrice,
+                    total_price: item.totalPrice,
                 });
             }
 
@@ -427,7 +515,10 @@ const EditInvoiceModal: React.FC<{ invoice: SaleInvoice; onClose: () => void; on
             const { data, error } = await supabase.rpc('update_sale_invoice_transaction', rpcPayload);
 
             if (error) throw error;
-            if (!data.success) throw new Error(data.message);
+            // The function returns a TABLE, so data is an array.
+            if (!data || data.length === 0 || !data[0].success) {
+                 throw new Error(data?.[0]?.message || "تراکنش در پایگاه داده ناموفق بود.");
+            }
 
             // On successful RPC, update local DB transactionally for instant UI feedback
             await db.transaction('rw', db.saleInvoices, db.drugs, async () => {
@@ -456,12 +547,11 @@ const EditInvoiceModal: React.FC<{ invoice: SaleInvoice; onClose: () => void; on
             });
 
             await logActivity('UPDATE', 'SaleInvoice', invoice.remoteId, { old: invoice, new: { ...invoice, items, totalAmount } });
-            showNotification(data.message, 'success');
+            showNotification(data[0].message, 'success');
             onSave();
         } catch (error: any) {
             console.error("Failed to update invoice:", error);
-            // A 403 error from Supabase often has an empty message. We provide a more helpful one.
-            const errorMessage = error.message || 'خطای دسترسی (403). نقش کاربری شما اجازه ویرایش یا حذف اقلام این فاکتور را در پایگاه داده ندارد.';
+            const errorMessage = error.message || 'درخواست توسط سرور رد شد. لطفاً از صحت دسترسی‌ها و داده‌های ورودی اطمینان حاصل کنید.';
             showNotification(`خطا در ویرایش فاکتور: ${errorMessage}`, 'error');
         } finally {
             setIsSaving(false);

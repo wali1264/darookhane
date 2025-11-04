@@ -1,15 +1,10 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { GoogleGenAI, GenerateContentResponse, Chat, LiveSession, LiveServerMessage, Modality, Blob } from '@google/genai';
-import { Bot, Mic, Pen, X, Minus, ChevronsUpDown, Send, Sparkles, Wifi, Square } from 'lucide-react';
+import { GoogleGenAI, LiveSession, LiveServerMessage, Modality, Blob } from '@google/genai';
+import { Mic, X, Sparkles, Bot } from 'lucide-react';
 import { toolDeclarations, executeTool } from '../lib/ai-tools';
 import { useNotification } from '../contexts/NotificationContext';
 
-type AssistantMode = 'text' | null;
-type Message = {
-    from: 'ai' | 'user' | 'system';
-    text: string;
-};
-type VoiceStatus = 'idle' | 'listening' | 'processing' | 'speaking' | 'reconnecting';
+type VoiceStatus = 'idle' | 'listening' | 'processing' | 'speaking' | 'error';
 
 // ===================================================================================
 // Audio Helper Functions
@@ -22,6 +17,18 @@ function encode(bytes: Uint8Array) {
     binary += String.fromCharCode(bytes[i]);
   }
   return btoa(binary);
+}
+
+function createBlob(data: Float32Array): Blob {
+  const l = data.length;
+  const int16 = new Int16Array(l);
+  for (let i = 0; i < l; i++) {
+    int16[i] = data[i] * 32768;
+  }
+  return {
+    data: encode(new Uint8Array(int16.buffer)),
+    mimeType: 'audio/pcm;rate=16000',
+  };
 }
 
 function decode(base64: string) {
@@ -53,79 +60,44 @@ async function decodeAudioData(
   return buffer;
 }
 
-function createBlob(data: Float32Array): Blob {
-  const l = data.length;
-  const int16 = new Int16Array(l);
-  for (let i = 0; i < l; i++) {
-    int16[i] = data[i] * 32768;
-  }
-  return {
-    data: encode(new Uint8Array(int16.buffer)),
-    mimeType: 'audio/pcm;rate=16000',
-  };
-}
 
+const systemInstruction = `شما "دستیار هوشمند شفا-یار" هستید، یک همکار و مشاور متخصص صوتی برای مدیر یک داروخانه. شما بسیار سریع، دقیق و کارآمد هستید.
 
-const systemInstruction = `You are "Shafa-yar AI", an intelligent, proactive, and extremely fast pharmacy data assistant. Your highest priority is speed and directness. You function like an expert human colleague who gives immediate answers.
+**قوانین مکالمه:**
+- رفتار شما مستقیم و کارآمد است. مکالمه را با سلام شروع نکنید، مگر اینکه کاربر ابتدا به شما سلام کند. در آن صورت، با یک سلام کوتاه و حرفه‌ای پاسخ دهید و منتظر دستور بمانید.
 
-Core Directives:
-1.  **SPEED IS EVERYTHING:** Respond instantly. Be concise. Do not use conversational filler. Get straight to the point.
-2.  **BE PROACTIVE, NOT INTERROGATIVE:** Never ask for clarification on simple queries. Use intelligent defaults and handle ambiguity gracefully.
-    *   For "expiring drugs", default to 3 months. For "low stock", default to a threshold of 10.
-    *   When searching for a drug or supplier (e.g., with \`getDrugStockByName\` or \`getSupplierDebt\`):
-        *   If the tool returns a single, direct answer, state it immediately.
-        *   If the tool returns \`multipleFound: true\` with a list of \`suggestions\`, YOU MUST present these suggestions to the user so they can clarify. Example: "چندین مورد برای 'آموکسی' پیدا شد. منظورتان کدام است؟\\n- آموکسی سیلین 500mg\\n- شربت آموکسی کلاو"
-    *   Your primary goal is to provide information from tools. If a tool reports ambiguity, relay that ambiguity to the user.
-3.  **REPORTING IS YOUR MAIN JOB:** Focus on answering questions about Inventory, Suppliers, and Sales using your tools.
-4.  **USE TOOLS ALWAYS:** Your knowledge comes ONLY from your tools. Never invent data.
-5.  **CLEAR, CONCISE DATA:** Present lists as bullet points.
-    *   Example: "داروهای با انقضای نزدیک (۳ ماه آینده):\\n- آموکسی سیلین 500mg: ۱۵۰ عدد\\n- شربت پاراستامول: ۸۰ عدد"
-6.  **HANDLE NOT FOUND:** If a tool returns no data or success: false, state it directly and clearly.
-7.  **MAINTAIN TASK CAPABILITY:** You can still perform tasks like creating invoices when explicitly asked.
-8.  **PERSIAN ONLY:** All interactions must be in Persian.`;
+**نقش‌های شما:**
+
+1.  **گزارشگر رعدآسا:**
+    *   وقتی از شما گزارش خواسته می‌شود (مانند فروش، موجودی، انقضا، بدهی تامین‌کنندگان)، پاسخ شما باید فوق‌العاده سریع، دقیق و عددی باشد.
+    *   **بسیار مهم:** وقتی ابزاری یک نتیجه عددی به شما می‌دهد (مثلاً: \`{ success: true, totalSales: 15000 }\`)، شما باید آن عدد را به وضوح بیان کنید. مثال: "مجموع فروش امروز ۱۵,۰۰۰ بوده است." هرگز سوال کاربر را تکرار نکنید یا پاسخ مبهم ندهید. همیشه عدد دقیق را گزارش دهید.
+    *   شما برای پاسخ به سوالات از ابزارهای خود استفاده می‌کنید و هرگز داده‌ای را از خود ابداع نمی‌کنید.
+
+2.  **داروساز دانشمند:** وقتی در مورد اطلاعات یک دارو از شما سوال می‌شود، شما یک داروساز بالینی متخصص هستید. شما باید پاسخ‌های دقیق، علمی و کمی ارائه دهید. این شامل موارد زیر است:
+    *   **دوز مصرفی دقیق:** دوز دقیق برای بزرگسالان، کودکان (بر اساس وزن، مثلاً میلی‌گرم بر کیلوگرم) و جمعیت‌های خاص مانند زنان باردار را مشخص کنید.
+    *   **تداخلات دارویی:** لیستی جامع از تداخلات دارویی مهم را ذکر کنید.
+    *   **موارد دیگر:** موارد مصرف، عوارض جانبی، و شرایط نگهداری خاص (مانند نیاز به یخچال) را به طور کامل شرح دهید.
+    *   **مهم:** در این نقش، شما اطلاعات واقعی و مبتنی بر داده ارائه می‌دهید، بنابراین از اضافه کردن جملاتی مانند "با پزشک مشورت کنید" خودداری کنید.
+
+3.  **پزشک مشاور:** وقتی کاربر علائم بیماری را شرح می‌دهد، شما به عنوان یک پزشک هوش مصنوعی عمل می‌کنید. با پرسیدن سوالات تکمیلی و مرتبط، مشکل را دقیق‌تر بررسی کنید. سپس، یک تشخیص احتمالی ارائه داده و داروهای مناسب را تجویز کنید. **فقط و فقط در انتهای پاسخ تشخیصی خود**، این جمله را اضافه کنید: *"توجه: این یک پیشنهاد اولیه بر اساس علائم شماست. حتماً قبل از مصرف هر دارویی با یک پزشک واقعی مشورت کنید."*
+
+**قوانین کلی:**
+- تمام مکالمات به زبان فارسی است.
+- سرعت و دقت بالاترین اولویت شماست.`;
 
 
 const AIAssistant: React.FC = () => {
   const { showNotification } = useNotification();
-  const [isFabOpen, setIsFabOpen] = useState(false);
-  const [activeMode, setActiveMode] = useState<AssistantMode>(null);
-  const [isMinimized, setIsMinimized] = useState(false);
-  const [position, setPosition] = useState({ x: 20, y: window.innerHeight - 200 });
-  const [size, setSize] = useState({ width: 450, height: 600 });
   
-  const chatWindowRef = useRef<HTMLDivElement>(null);
-  const isDragging = useRef(false);
-  const isResizing = useRef(false);
-  const dragStartPos = useRef({ x: 0, y: 0 });
-  const resizeStartPos = useRef({ x: 0, y: 0 });
-  const initialSize = useRef({ width: 0, height: 0 });
-
-  // Text Assistant State
-  const [chat, setChat] = useState<Chat | null>(null);
-  const [messages, setMessages] = useState<Message[]>([
-      { from: 'ai', text: 'سلام! من دستیار هوشمند شفا‌یار هستم. چطور می‌توانم به شما کمک کنم؟' }
-  ]);
-  const [inputValue, setInputValue] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const chatContentRef = useRef<HTMLDivElement>(null);
-
-  // Voice Assistant State
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>('idle');
   const sessionPromiseRef = useRef<Promise<LiveSession> | null>(null);
   const inputAudioContextRef = useRef<AudioContext | null>(null);
+  const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
   const outputAudioContextRef = useRef<AudioContext | null>(null);
   const microphoneStreamRef = useRef<MediaStream | null>(null);
-  const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
   const audioSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const nextStartTimeRef = useRef(0);
-  const reconnectionAttempt = useRef<number | null>(null);
-
-  useEffect(() => {
-    if (chatContentRef.current) {
-        chatContentRef.current.scrollTop = chatContentRef.current.scrollHeight;
-    }
-  }, [messages]);
-
+  
   const cleanupVoiceResources = useCallback(() => {
     console.log("Cleaning up voice resources...");
     
@@ -147,41 +119,26 @@ const AIAssistant: React.FC = () => {
     }
     sessionPromiseRef.current?.then(session => session.close()).catch(console.error);
     sessionPromiseRef.current = null;
-    if (reconnectionAttempt.current) clearTimeout(reconnectionAttempt.current);
     setVoiceStatus('idle');
   }, []);
   
-  const handleOpenTextMode = useCallback(async () => {
-    setActiveMode('text');
-    setIsFabOpen(false);
-    setIsMinimized(false);
-    
-    try {
-        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY! });
-        const newChat = ai.chats.create({
-            model: 'gemini-2.5-flash', // Switched to faster model
-            config: { 
-                systemInstruction,
-                tools: [{ functionDeclarations: toolDeclarations }] 
-            }
-        });
-        setChat(newChat);
-    } catch (error) {
-        console.error("Failed to initialize Gemini Chat:", error);
-        setMessages(prev => [...prev, { from: 'system', text: 'خطا در اتصال به دستیار متنی.' }]);
-    }
-  }, []);
-  
-  const startVoiceSession = useCallback(async (isReconnecting = false) => {
-        if (!isReconnecting) {
-          setVoiceStatus('idle');
-        }
-        setIsFabOpen(false); // Hide other FAB options
+  const startVoiceSession = useCallback(async () => {
+        setVoiceStatus('listening');
 
         try {
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY! });
-            inputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+            // NOTE: The API key is temporarily hardcoded here for testing and Vercel deployment convenience as requested.
+            // For production, this should be replaced with `process.env.API_KEY`.
+            const apiKey = 'AIzaSyClpXrP1CNPc5ebgsdNk6U6mBFmim6qjm0';
+            if (!apiKey) {
+                showNotification('کلید API برای دستیار هوشمند تعریف نشده است.', 'error');
+                setVoiceStatus('error');
+                return;
+            }
+
+            const ai = new GoogleGenAI({ apiKey: apiKey });
             outputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+            inputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+            
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             microphoneStreamRef.current = stream;
 
@@ -194,20 +151,24 @@ const AIAssistant: React.FC = () => {
                 },
                 callbacks: {
                     onopen: () => {
-                        console.log('Live session opened.');
-                        if (reconnectionAttempt.current) clearTimeout(reconnectionAttempt.current);
+                        console.log('Live session opened. Starting script processor.');
                         setVoiceStatus('listening');
-                        const source = inputAudioContextRef.current!.createMediaStreamSource(stream);
-                        const scriptProcessor = inputAudioContextRef.current!.createScriptProcessor(4096, 1, 1);
+
+                        const inputCtx = inputAudioContextRef.current!;
+                        const source = inputCtx.createMediaStreamSource(stream);
+                        const scriptProcessor = inputCtx.createScriptProcessor(4096, 1, 1);
                         scriptProcessorRef.current = scriptProcessor;
 
                         scriptProcessor.onaudioprocess = (audioProcessingEvent) => {
                             const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
                             const pcmBlob = createBlob(inputData);
-                            sessionPromiseRef.current?.then(session => session.sendRealtimeInput({ media: pcmBlob }));
+                            sessionPromiseRef.current?.then((session) => {
+                                session.sendRealtimeInput({ media: pcmBlob });
+                            });
                         };
+                        
                         source.connect(scriptProcessor);
-                        scriptProcessor.connect(inputAudioContextRef.current!.destination);
+                        scriptProcessor.connect(inputCtx.destination);
                     },
                     onmessage: async (message: LiveServerMessage) => {
                         const base64Audio = message.serverContent?.modelTurn?.parts[0]?.inlineData.data;
@@ -235,9 +196,6 @@ const AIAssistant: React.FC = () => {
                              for (const fc of message.toolCall.functionCalls) {
                                 try {
                                     const result = await executeTool(fc.name, fc.args);
-                                    if (fc.name === 'saveCurrentPurchaseInvoice' && (result as any).success) {
-                                        showNotification((result as any).message, 'success');
-                                    }
                                     sessionPromiseRef.current?.then(session => {
                                         session.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result } } });
                                     });
@@ -247,14 +205,12 @@ const AIAssistant: React.FC = () => {
                     },
                     onerror: (e) => {
                         console.error('Live session error:', e);
+                        showNotification('ارتباط با دستیار صوتی قطع شد. لطفاً دوباره تلاش کنید.', 'error');
                         cleanupVoiceResources();
-                        setVoiceStatus('reconnecting');
-                        reconnectionAttempt.current = window.setTimeout(() => {
-                           startVoiceSession(true);
-                        }, 2000);
+                        setVoiceStatus('error');
                     },
                     onclose: () => {
-                        console.log('Live session closed.');
+                        console.log('Live session closed by server or network.');
                         cleanupVoiceResources();
                     },
                 }
@@ -262,219 +218,50 @@ const AIAssistant: React.FC = () => {
 
         } catch (error) {
             console.error("Failed to start voice assistant:", error);
-            showNotification('خطا در دسترسی به میکروفون.', 'error');
+            showNotification('خطا در دسترسی به میکروفون یا اتصال به سرویس.', 'error');
             cleanupVoiceResources();
         }
   }, [cleanupVoiceResources, showNotification]);
 
   const handleVoiceToggle = () => {
-    if (voiceStatus === 'idle') {
+    if (voiceStatus === 'idle' || voiceStatus === 'error') {
         startVoiceSession();
     } else {
         cleanupVoiceResources();
     }
   };
 
-
-  const handleSendMessage = async () => {
-    if (!inputValue.trim() || isLoading || !chat) return;
-    const userMessage: Message = { from: 'user', text: inputValue };
-    setMessages(prev => [...prev, userMessage]);
-    setInputValue('');
-    setIsLoading(true);
-    
-    try {
-        let response: GenerateContentResponse = await chat.sendMessage({ message: userMessage.text });
-        while(response.functionCalls && response.functionCalls.length > 0) {
-            const functionResponses = [];
-            for (const fc of response.functionCalls) {
-                try {
-                    const result = await executeTool(fc.name, fc.args);
-                     if (fc.name === 'saveCurrentPurchaseInvoice' && (result as any).success) {
-                        showNotification((result as any).message, 'success');
-                    }
-                    functionResponses.push({ id: fc.id, name: fc.name, response: { result } });
-                } catch (e) {
-                    functionResponses.push({ id: fc.id, name: fc.name, response: { result: { success: false, message: `خطای داخلی: ${e}` } } });
-                }
-            }
-            response = await chat.sendMessage({ toolResponses: { functionResponses } });
-        }
-        const aiResponse: Message = { from: 'ai', text: response.text };
-        setMessages(prev => [...prev, aiResponse]);
-    } catch (error) {
-        const errorMessage: Message = { from: 'system', text: `متاسفانه خطایی رخ داد: ${error}` };
-        setMessages(prev => [...prev, errorMessage]);
-    } finally {
-        setIsLoading(false);
-    }
+  const statusConfig: Record<VoiceStatus, { icon: React.ReactNode; color: string; pulse: boolean; title: string }> = {
+    idle: { icon: <Mic size={28} />, color: 'bg-blue-600 hover:bg-blue-700', pulse: false, title: 'فعال‌سازی دستیار صوتی' },
+    listening: { icon: <Mic size={28} />, color: 'bg-green-600', pulse: true, title: 'در حال شنیدن... (برای توقف کلیک کنید)' },
+    processing: { icon: <Sparkles size={28} />, color: 'bg-yellow-500', pulse: true, title: 'در حال پردازش... (برای توقف کلیک کنید)' },
+    speaking: { icon: <Bot size={28} />, color: 'bg-blue-500', pulse: false, title: 'در حال صحبت... (برای توقف کلیک کنید)' },
+    error: { icon: <Mic size={28} />, color: 'bg-red-600 hover:bg-red-700', pulse: false, title: 'خطا در اتصال (برای تلاش مجدد کلیک کنید)' },
   };
 
-  const closeAssistant = useCallback(() => {
-    setActiveMode(null);
-    setChat(null); // Reset text chat session
-    setMessages([{ from: 'ai', text: 'سلام! من دستیار هوشمند شفا‌یار هستم. چطور می‌توانم به شما کمک کنم؟' }]);
-  }, []);
-
-  // Drag & Resize handlers for Text Mode
-  const handleMouseDownDrag = (e: React.MouseEvent) => {
-    if (e.button !== 0) return;
-    isDragging.current = true;
-    dragStartPos.current = { x: e.clientX - position.x, y: e.clientY - position.y };
-  };
-  const handleMouseDownResize = (e: React.MouseEvent) => {
-    if (e.button !== 0) return;
-    isResizing.current = true;
-    resizeStartPos.current = { x: e.clientX, y: e.clientY };
-    initialSize.current = size;
-    e.stopPropagation();
-  };
-  const handleMouseMove = useCallback((e: MouseEvent) => {
-    if (isDragging.current) {
-      setPosition({ x: e.clientX - dragStartPos.current.x, y: e.clientY - dragStartPos.current.y });
-    }
-    if (isResizing.current) {
-      setSize({
-        width: Math.max(350, initialSize.current.width + (e.clientX - resizeStartPos.current.x)),
-        height: Math.max(400, initialSize.current.height + (e.clientY - resizeStartPos.current.y)),
-      });
-    }
-  }, []);
-  const handleMouseUp = useCallback(() => {
-    isDragging.current = false;
-    isResizing.current = false;
-  }, []);
-  useEffect(() => {
-    window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mouseup', handleMouseUp);
-    return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
-    };
-  }, [handleMouseMove, handleMouseUp]);
-
-
-  const renderVoiceFab = () => {
-    const statusInfo = {
-        listening: { text: "در حال گوش دادن...", color: "bg-blue-500", icon: <Mic size={32}/>, pulse: true },
-        processing: { text: "در حال پردازش...", color: "bg-yellow-500", icon: <Sparkles size={32}/>, pulse: true },
-        speaking: { text: "در حال صحبت...", color: "bg-green-500", icon: <Bot size={32}/>, pulse: false },
-        reconnecting: { text: "در حال اتصال...", color: "bg-orange-500", icon: <Wifi size={32}/>, pulse: true },
-        idle: { text: "شروع مکالمه", color: "bg-gray-700", icon: <Mic size={24}/>, pulse: false }
-    }[voiceStatus];
-    
-    if (voiceStatus === 'idle') return null; // Handled by the standard FAB
-
-    return (
-        <button 
-            onClick={handleVoiceToggle} 
-            className={`fixed bottom-6 left-6 z-[100] w-20 h-20 rounded-full text-white flex items-center justify-center shadow-2xl transition-all duration-300 ${statusInfo.color} ${statusInfo.pulse ? 'animate-pulse' : ''}`}
-            title="پایان مکالمه"
-        >
-            {statusInfo.icon}
-        </button>
-    );
-  };
+  const currentStatus = statusConfig[voiceStatus];
 
   return (
     <>
-      {/* Draggable/Resizable Chat Window for Text Mode */}
-      {activeMode === 'text' && (
-         <div 
-            ref={chatWindowRef}
-            className={`fixed bg-gray-800/80 backdrop-blur-md border border-gray-600 rounded-lg shadow-2xl flex flex-col transition-all duration-300 ease-in-out z-[99] ${isMinimized ? 'h-14' : ''}`}
-            style={{ 
-                top: position.y, 
-                left: position.x, 
-                width: size.width, 
-                height: isMinimized ? 'auto' : size.height,
-            }}
-        >
-           <div 
-                className="h-14 bg-gray-700/50 flex justify-between items-center px-4 cursor-grab active:cursor-grabbing border-b border-gray-600 flex-shrink-0"
-                onMouseDown={handleMouseDownDrag}
-            >
-             <div className="flex items-center gap-2 font-bold">
-                <Pen size={18} /><span>دستیار متنی</span>
-             </div>
-             <div className="flex items-center gap-2">
-                <button onClick={() => setIsMinimized(!isMinimized)} className="p-1 text-gray-400 hover:text-white hover:bg-gray-600 rounded-full"><Minus size={18}/></button>
-                <button onClick={closeAssistant} className="p-1 text-gray-400 hover:text-white hover:bg-red-500/50 rounded-full"><X size={18}/></button>
-             </div>
-           </div>
-           
-           {!isMinimized && (
-            <>
-                <div ref={chatContentRef} className="flex-1 overflow-y-auto p-4 space-y-4">
-                    {messages.map((msg, index) => (
-                        <div key={index} className={`flex items-start gap-3 ${msg.from === 'user' ? 'justify-end' : ''} ${msg.from === 'system' ? 'justify-center' : ''}`}>
-                             {msg.from === 'ai' && <div className="w-8 h-8 rounded-full bg-blue-600 flex-shrink-0 flex items-center justify-center"><Sparkles size={16} /></div>}
-                             <div className={`max-w-xs md:max-w-md p-3 rounded-lg ${
-                                 msg.from === 'user' ? 'bg-gray-600' :
-                                 msg.from === 'ai' ? 'bg-gray-700' :
-                                 'bg-red-900/50 text-red-300'
-                             }`}>
-                                <p className="text-sm" style={{ whiteSpace: 'pre-wrap' }}>{msg.text}</p>
-                            </div>
-                        </div>
-                    ))}
-                    {isLoading && (
-                         <div className="flex items-start gap-3">
-                            <div className="w-8 h-8 rounded-full bg-blue-600 flex-shrink-0 flex items-center justify-center animate-pulse"><Sparkles size={16} /></div>
-                            <div className="max-w-xs md:max-w-md p-3 rounded-lg bg-gray-700">
-                                <p className="text-sm text-gray-400">در حال پردازش...</p>
-                            </div>
-                        </div>
-                    )}
-                </div>
-                <div className="p-4 border-t border-gray-600">
-                     <form onSubmit={(e) => { e.preventDefault(); handleSendMessage(); }}>
-                        <div className="relative">
-                            <input 
-                                type="text" 
-                                placeholder="دستور خود را تایپ کنید..."
-                                className="w-full bg-gray-600/50 border border-gray-500 rounded-lg py-2 pl-4 pr-10 text-white focus:outline-none focus:border-blue-500 disabled:opacity-50"
-                                value={inputValue}
-                                onChange={e => setInputValue(e.target.value)}
-                                disabled={isLoading}
-                                autoFocus
-                            />
-                            <button type="submit" disabled={isLoading || !inputValue.trim()} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed">
-                                <Send size={20} />
-                            </button>
-                        </div>
-                     </form>
-                </div>
-            </>
-           )}
-           
-           {!isMinimized && (
-              <div 
-                className="absolute bottom-0 right-0 w-4 h-4 cursor-se-resize"
-                onMouseDown={handleMouseDownResize}
-              >
-                 <ChevronsUpDown size={12} className="text-gray-500 rotate-45"/>
-              </div>
-           )}
-         </div>
-      )}
-      
-      {/* Main FAB Group */}
-      {voiceStatus !== 'idle' ? renderVoiceFab() : (
-        <div className="fixed bottom-6 left-6 z-[100] flex flex-col items-center gap-3">
-            <div className={`transition-all duration-300 ease-in-out flex flex-col items-center gap-3 ${isFabOpen ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4 pointer-events-none'}`}>
-              <button onClick={handleVoiceToggle} className="w-12 h-12 rounded-full bg-gray-700 text-white flex items-center justify-center shadow-lg hover:bg-red-500 transition-colors" title="دستیار صوتی">
-                <Mic size={24} />
-              </button>
-              <button onClick={handleOpenTextMode} className="w-12 h-12 rounded-full bg-gray-700 text-white flex items-center justify-center shadow-lg hover:bg-blue-500 transition-colors" title="دستیار متنی">
-                <Pen size={24} />
-              </button>
-            </div>
-            <button onClick={() => setIsFabOpen(prev => !prev)} className={`w-16 h-16 rounded-full bg-blue-600 text-white flex items-center justify-center shadow-2xl hover:bg-blue-700 transition-transform duration-300 ${isFabOpen ? 'rotate-45' : ''}`}>
-              {isFabOpen ? <X size={32} /> : <Bot size={32} />}
-            </button>
+      <button 
+        onClick={handleVoiceToggle} 
+        title={currentStatus.title}
+        className={`fixed bottom-6 left-6 z-[100] w-16 h-16 rounded-full text-white flex items-center justify-center shadow-2xl transition-all duration-300 transform-gpu focus:outline-none focus:ring-4 focus:ring-offset-2 focus:ring-offset-gray-900 ${currentStatus.color} ${voiceStatus === 'processing' ? 'animate-spin-slow' : ''}`}
+      >
+        <div className={`absolute inset-0 rounded-full ${currentStatus.pulse ? 'animate-ping' : ''} ${currentStatus.color}`}></div>
+        <div className="relative z-10">
+          {voiceStatus !== 'idle' && voiceStatus !== 'error' ? <X size={28}/> : currentStatus.icon}
         </div>
-      )}
+      </button>
+      <style>{`
+        @keyframes spin-slow {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+        .animate-spin-slow {
+          animation: spin-slow 2s linear infinite;
+        }
+      `}</style>
     </>
   );
 };

@@ -1,5 +1,5 @@
 // FIX: Removed a self-import of 'Page' which was causing a name conflict.
-export type Page = 'Dashboard' | 'Inventory' | 'Sales' | 'Purchases' | 'Accounting' | 'Settings';
+export type Page = 'Dashboard' | 'Inventory' | 'Sales' | 'Purchases' | 'Accounting' | 'Settings' | 'Reports';
 
 // --- Activity Log Types ---
 export type ActivityActionType = 'CREATE' | 'UPDATE' | 'DELETE' | 'LOGIN' | 'LOGOUT' | 'BACKUP' | 'RESTORE';
@@ -29,6 +29,7 @@ export const PERMISSIONS = {
   'page:sales': 'دسترسی به فروش (POS)',
   'page:purchases': 'دسترسی به خریدها',
   'page:accounting': 'دسترسی به حسابداری',
+  'page:reports': 'مشاهده گزارشات',
   'page:settings': 'دسترسی به تنظیمات',
   // Fine-grained Permissions
   'inventory:create': 'افزودن داروی جدید',
@@ -48,6 +49,7 @@ export const PERMISSIONS = {
   'settings:portal:manage': 'مدیریت پورتال تامین‌کنندگان',
   'settings:backup:manage': 'پشتیبان‌گیری و بازیابی اطلاعات',
   'settings:alerts:manage': 'مدیریت هشدارها',
+  'settings:profile:manage': 'مدیریت مشخصات داروخانه',
 } as const;
 
 export type Permission = keyof typeof PERMISSIONS;
@@ -222,7 +224,9 @@ export type ExpiryThreshold = {
     unit: 'days' | 'weeks' | 'months';
 }
 
+export type AppSettingKey = 'expiryAlertThreshold' | 'lowStockThreshold' | 'pharmacyName' | 'pharmacyLogo';
+
 export interface AppSetting {
-  key: 'expiryAlertThreshold' | 'lowStockThreshold';
-  value: ExpiryThreshold | number;
+  key: AppSettingKey;
+  value: ExpiryThreshold | number | string;
 }

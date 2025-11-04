@@ -1,4 +1,6 @@
-import React from 'react';
+import React, { useMemo } from 'react';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { db } from '../db';
 import { Payment } from '../types';
 
 interface PrintablePaymentReceiptProps {
@@ -7,10 +9,20 @@ interface PrintablePaymentReceiptProps {
 }
 
 const PrintablePaymentReceipt = React.forwardRef<HTMLDivElement, PrintablePaymentReceiptProps>(({ payment, supplierName }, ref) => {
+  const settings = useLiveQuery(() => db.settings.toArray());
+
+  const pharmacyInfo = useMemo(() => {
+    if (!settings) return { name: 'شفا-یار', logo: null };
+    const name = settings.find(s => s.key === 'pharmacyName')?.value as string || 'شفا-یار';
+    const logo = settings.find(s => s.key === 'pharmacyLogo')?.value as string || null;
+    return { name, logo };
+  }, [settings]);
+
   return (
     <div ref={ref} className="bg-gray-900 text-white p-6 printable-area">
-      <div className="text-center mb-8 border-b border-gray-600 pb-4">
-        <h1 className="text-2xl font-bold">داروخانه شفا-یار</h1>
+      <div className="text-center mb-8 border-b border-gray-600 pb-4 flex flex-col items-center">
+        {pharmacyInfo.logo && <img src={pharmacyInfo.logo} alt="Pharmacy Logo" className="h-20 w-auto mb-2 object-contain" />}
+        <h1 className="text-2xl font-bold">{pharmacyInfo.name}</h1>
         <p className="text-gray-400 mt-1">رسید پرداخت وجه</p>
       </div>
       

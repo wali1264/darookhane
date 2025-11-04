@@ -1,7 +1,9 @@
 import React, { useState, useMemo } from 'react';
 import { Page, Permission } from '../types';
-import { BarChart3, Pill, ShoppingCart, Truck, Landmark, Settings, ChevronLeft, ChevronRight, Dna } from 'lucide-react';
+import { BarChart3, Pill, ShoppingCart, Truck, Landmark, Settings, ChevronLeft, ChevronRight, Dna, FileText } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { db } from '../db';
 
 interface SidebarProps {
   activePage: Page;
@@ -46,6 +48,15 @@ const NavItem: React.FC<{ icon: React.ReactNode; text: string; active: boolean; 
 const Sidebar: React.FC<SidebarProps> = ({ activePage, setActivePage }) => {
   const [collapsed, setCollapsed] = useState(false);
   const { hasPermission } = useAuth();
+  
+  const settings = useLiveQuery(() => db.settings.toArray());
+  const pharmacyInfo = useMemo(() => {
+    if (!settings) return { name: 'شفا-یار', logo: null };
+    const name = settings.find(s => s.key === 'pharmacyName')?.value as string || 'شفا-یار';
+    const logo = settings.find(s => s.key === 'pharmacyLogo')?.value as string || null;
+    return { name, logo };
+  }, [settings]);
+
 
   const allNavItems: NavItemConfig[] = [
     { id: 'Dashboard', icon: <BarChart3 size={22} />, text: 'داشبورد', permission: 'page:dashboard' },
@@ -53,6 +64,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activePage, setActivePage }) => {
     { id: 'Sales', icon: <ShoppingCart size={22} />, text: 'فروش (POS)', permission: 'page:sales' },
     { id: 'Purchases', icon: <Truck size={22} />, text: 'خریدها', permission: 'page:purchases' },
     { id: 'Accounting', icon: <Landmark size={22} />, text: 'حسابداری', permission: 'page:accounting' },
+    { id: 'Reports', icon: <FileText size={22} />, text: 'گزارشات', permission: 'page:reports' },
     { id: 'Settings', icon: <Settings size={22} />, text: 'تنظیمات', permission: 'page:settings' },
   ];
 
@@ -62,8 +74,8 @@ const Sidebar: React.FC<SidebarProps> = ({ activePage, setActivePage }) => {
     <aside className={`relative bg-gray-800 text-gray-200 h-screen transition-all duration-300 ease-in-out ${collapsed ? 'w-20' : 'w-64'}`}>
       <div className="flex items-center justify-between p-4 border-b border-gray-700">
         <div className={`flex items-center transition-opacity duration-200 ${collapsed ? 'opacity-0 w-0' : 'opacity-100'}`}>
-          <Dna size={28} className="text-blue-400" />
-          <h1 className="text-xl font-bold mr-2 whitespace-nowrap">شفا-یار</h1>
+          {pharmacyInfo.logo ? <img src={pharmacyInfo.logo} alt="Logo" className="h-8 w-auto object-contain" /> : <Dna size={28} className="text-blue-400" />}
+          <h1 className="text-xl font-bold mr-2 whitespace-nowrap">{pharmacyInfo.name}</h1>
         </div>
          <div className={`flex items-center justify-center transition-all ${collapsed ? 'w-full' : ''}`}>
            <button onClick={() => setCollapsed(!collapsed)} className="p-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500">
@@ -87,7 +99,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activePage, setActivePage }) => {
       </nav>
       <div className={`absolute bottom-0 left-0 w-full p-4 border-t border-gray-700 ${collapsed ? 'hidden' : 'block'}`}>
          <div className="text-xs text-center text-gray-500">
-            <p>&copy; 2024 شفا-یار</p>
+            <p>&copy; 2024 {pharmacyInfo.name}</p>
             <p>نسخه آنلاین</p>
          </div>
       </div>

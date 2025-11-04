@@ -5,10 +5,11 @@ import Inventory from './pages/Inventory';
 import Sales from './pages/Sales';
 import Purchases from './pages/Purchases';
 import Accounting from './pages/Accounting';
+import Reports from './pages/Reports';
 import Settings from './pages/Settings';
 import Login from './pages/Login';
 import SupplierPortal from './pages/SupplierPortal';
-import { Page, SaleInvoice, SaleItem } from './types';
+import { Page, SaleInvoice, SaleItem, ClinicTransaction } from './types';
 import Header from './components/Header';
 import AIAssistant from './components/AIAssistant';
 import { useAuth } from './contexts/AuthContext';
@@ -36,6 +37,8 @@ const MainApp: React.FC = () => {
         return <Purchases />;
       case 'Accounting':
         return <Accounting />;
+      case 'Reports':
+        return <Reports />;
       case 'Settings':
         return <Settings />;
       default:
@@ -63,6 +66,7 @@ const pageTitles: Record<Page, string> = {
   Sales: 'فروش (POS)',
   Purchases: 'خریدها',
   Accounting: 'حسابداری',
+  Reports: 'گزارشات',
   Settings: 'تنظیمات',
 };
 
@@ -154,6 +158,66 @@ const syncSaleInvoicesWithItems = async () => {
 };
 
 
+// ============================================================================
+// Data Synchronization Logic for Clinic Transactions (Handles relations)
+// ============================================================================
+const syncClinicTransactions = async () => {
+    console.log(`[Sync] Starting sync for clinic transactions.`);
+    const { data: remoteTransactions, error } = await supabase
+        .from('clinic_transactions')
+        .select('*')
+        .order('date', { ascending: false })
+        .limit(500); // Sync recent 500 transactions
+
+    if (error) {
+        console.error(`[Sync] Error fetching clinic_transactions:`, error);
+        return;
+    }
+
+    if (remoteTransactions) {
+        // Create maps for services and providers to translate foreign keys
+        const localServices = await db.clinicServices.toArray();
+        const serviceRemoteIdToLocalIdMap = new Map<number, number>();
+        localServices.forEach(s => {
+            if (s.remoteId && s.id) serviceRemoteIdToLocalIdMap.set(s.remoteId, s.id);
+        });
+
+        const localProviders = await db.serviceProviders.toArray();
+        const providerRemoteIdToLocalIdMap = new Map<number, number>();
+        localProviders.forEach(p => {
+            if (p.remoteId && p.id) providerRemoteIdToLocalIdMap.set(p.remoteId, p.id);
+        });
+
+        const localTransactionsToPut: ClinicTransaction[] = [];
+        for (const remoteTx of remoteTransactions) {
+            const localServiceId = serviceRemoteIdToLocalIdMap.get(remoteTx.service_id);
+            if (!localServiceId) {
+                console.warn(`[Sync] Skipping clinic transaction #${remoteTx.id} because its service (remoteId: ${remoteTx.service_id}) is not found in local DB.`);
+                continue; 
+            }
+
+            const localProviderId = remoteTx.provider_id ? providerRemoteIdToLocalIdMap.get(remoteTx.provider_id) : undefined;
+
+            const existingLocalTx = await db.clinicTransactions.where('remoteId').equals(remoteTx.id).first();
+            
+            localTransactionsToPut.push({
+                id: existingLocalTx?.id,
+                remoteId: remoteTx.id,
+                serviceId: localServiceId,
+                providerId: localProviderId,
+                patientName: remoteTx.patient_name,
+                amount: remoteTx.amount,
+                date: remoteTx.date,
+                ticketNumber: remoteTx.ticket_number,
+            });
+        }
+        
+        await db.clinicTransactions.bulkPut(localTransactionsToPut);
+        console.log(`[Sync] Successfully synced/updated ${localTransactionsToPut.length} clinic transactions.`);
+    }
+};
+
+
 const AppContent: React.FC = () => {
   const { currentUser, isLoading } = useAuth();
   const [isSyncing, setIsSyncing] = useState(false);
@@ -175,8 +239,12 @@ const AppContent: React.FC = () => {
                     await syncTable('drugBatches', 'drug_batches', '*', item => ({ ...item, remoteId: item.id, drugId: item.drug_id, lotNumber: item.lot_number, expiryDate: item.expiry_date, quantityInStock: item.quantity_in_stock, purchasePrice: item.purchase_price }));
                     await syncTable('clinicServices', 'clinic_services', '*', item => ({ ...item, remoteId: item.id, requiresProvider: item.requires_provider }));
                     await syncTable('serviceProviders', 'service_providers', '*', item => ({ ...item, remoteId: item.id }));
+                    await syncTable('simpleAccountingColumns', 'simple_accounting_columns', '*', item => ({ ...item, remoteId: item.id }));
+                    await syncTable('simpleAccountingEntries', 'simple_accounting_entries', 'id, date, patient_name, description, values', item => ({ ...item, remoteId: item.id, patientName: item.patient_name }));
+
                     
                     await syncSaleInvoicesWithItems();
+                    await syncClinicTransactions();
                     
                     localStorage.setItem(`lastSync_${currentUser.id}`, Date.now().toString());
                 } catch (error) {

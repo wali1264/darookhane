@@ -509,30 +509,8 @@ const DrugFormModal: React.FC<{ drug: Drug | null; onClose: () => void; }> = ({ 
             throw batchError;
         }
 
-        // On success, add to local cache
-        const localDrug: Drug = {
-            name: newDrugData.name,
-            company: newDrugData.company,
-            purchasePrice: newDrugData.purchase_price,
-            salePrice: newDrugData.sale_price,
-            totalStock: newDrugData.total_stock,
-            type: newDrugData.type,
-            barcode: newDrugData.barcode ?? undefined,
-            internalBarcode: newDrugData.internal_barcode ?? undefined,
-            remoteId: newDrugData.id,
-        };
-        
-        const newLocalDrugId = await db.drugs.add(localDrug);
-
-        const localBatch: DrugBatch = {
-            drugId: newLocalDrugId,
-            lotNumber: newBatchData.lot_number,
-            expiryDate: newBatchData.expiry_date,
-            quantityInStock: newBatchData.quantity_in_stock,
-            purchasePrice: newBatchData.purchase_price,
-            remoteId: newBatchData.id
-        };
-        await db.drugBatches.add(localBatch);
+        // The local cache will be updated by the real-time subscription in App.tsx.
+        // No local writes are needed here.
 
         await logActivity('CREATE', 'Drug', newDrugData.id, { newDrug: newDrugData, newBatch: newBatchData });
         showNotification(`داروی "${formData.name}" با موفقیت اضافه شد.`, 'success');
