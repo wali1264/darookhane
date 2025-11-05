@@ -1,5 +1,3 @@
-
-
 import React, { ReactNode } from 'react';
 import { X } from 'lucide-react';
 
@@ -13,11 +11,11 @@ interface ModalProps {
 const Modal: React.FC<ModalProps> = ({ title, onClose, children, headerContent }) => {
   return (
     <div 
-      className="fixed inset-0 bg-black bg-opacity-70 z-50 flex justify-center items-center p-4 print:bg-transparent print:p-0 print:items-start"
+      className="fixed inset-0 bg-black bg-opacity-70 z-50 flex justify-center items-center p-4 modal-backdrop print:bg-transparent print:p-0"
       onClick={onClose}
     >
       <div 
-        className="bg-gray-800 rounded-lg shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col border border-gray-600 animate-fade-in-up modal-content-wrapper print:max-w-full print:max-h-full print:shadow-none print:border-none print:bg-transparent"
+        className="bg-gray-800 rounded-lg shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col border border-gray-600 animate-fade-in-up modal-content-wrapper print:shadow-none print:border-none print:bg-transparent print:w-full print:h-full print:max-h-full"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex justify-between items-center p-4 border-b border-gray-700 print:hidden">
@@ -32,7 +30,7 @@ const Modal: React.FC<ModalProps> = ({ title, onClose, children, headerContent }
             <X size={24} />
           </button>
         </div>
-        <div className="p-6 overflow-y-auto modal-scrollable-content print:p-0 print:overflow-visible">
+        <div className="p-6 overflow-y-auto modal-content print:p-0 print:overflow-visible">
           {children}
         </div>
       </div>
@@ -44,19 +42,26 @@ const Modal: React.FC<ModalProps> = ({ title, onClose, children, headerContent }
         .animate-fade-in-up {
           animation: fade-in-up 0.3s ease-out forwards;
         }
+
         @media print {
-            body > *:not(.modal-content-wrapper) {
-                display: none;
-            }
-            .modal-content-wrapper, .modal-scrollable-content {
-                display: block !important;
-                position: static !important;
-            }
-            .modal-content-wrapper {
-                max-height: none !important;
-                height: auto !important;
-                overflow: visible !important;
-            }
+          /* Hide all direct children of body except our modal backdrop */
+          body > *:not(.modal-backdrop) {
+            display: none !important;
+          }
+          
+          /* Reset the entire modal structure to be simple block elements for printing */
+          .modal-backdrop,
+          .modal-content-wrapper,
+          .modal-content {
+            position: static !important;
+            display: block !important;
+            width: auto !important;
+            height: auto !important;
+            max-width: none !important;
+            max-height: none !important;
+            overflow: visible !important;
+            background: transparent !important;
+          }
         }
       `}</style>
     </div>
