@@ -2,12 +2,13 @@ import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
 import { SaleInvoice, PurchaseInvoice, Drug, Supplier, Payment, DrugBatch } from '../types';
-import { TrendingUp, DollarSign, Archive, Printer, ListOrdered, ChevronLeft, Package, Users, PackageOpen, FileText, Banknote, ChevronsDown } from 'lucide-react';
+import { TrendingUp, DollarSign, Archive, Printer, ListOrdered, ChevronLeft, Package, Users, PackageOpen, FileText, Banknote, ChevronsDown, Barcode } from 'lucide-react';
 import Modal from '../components/Modal';
 import { parseJalaliDate } from '../lib/dateConverter';
 import PrintablePurchaseInvoice from '../components/PrintablePurchaseInvoice';
 import PrintableSupplierLedger, { Transaction } from '../components/PrintableSupplierLedger';
 import { supabase } from '../lib/supabaseClient';
+import PrintableBarcodeLabels from '../components/PrintableBarcodeLabels';
 
 
 // ============================================================================
@@ -22,6 +23,8 @@ const Reports: React.FC = () => {
         start: startOfMonth,
         end: new Date()
     });
+    
+    const [isBarcodeModalOpen, setIsBarcodeModalOpen] = useState(false);
 
     return (
         <div className="space-y-6">
@@ -36,7 +39,40 @@ const Reports: React.FC = () => {
                     <SupplierReports dateRange={dateRange} />
                     <InventoryStockReport />
                 </div>
+                
+                <div className="bg-gray-800 p-6 rounded-lg border border-gray-700 space-y-4 print-hidden">
+                    <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                        <Barcode size={22}/> چاپ بارکدهای داخلی
+                    </h3>
+                    <p className="text-sm text-gray-400">
+                        چاپ برچسب برای تمام داروهایی که دارای بارکد داخلی هستند. این برچسب‌ها شامل نام دارو و بارکد قابل اسکن می‌باشند و می‌توانند برای چسباندن روی محصولات استفاده شوند.
+                    </p>
+                    <button onClick={() => setIsBarcodeModalOpen(true)} className="btn-primary flex items-center gap-2">
+                        <Printer size={16}/> نمایش و چاپ برچسب‌ها
+                    </button>
+                </div>
+
             </div>
+            
+            {isBarcodeModalOpen && (
+                <PrintPreviewModal title="چاپ برچسب‌های بارکد داخلی" onClose={() => setIsBarcodeModalOpen(false)}>
+                    <PrintableBarcodeLabels />
+                </PrintPreviewModal>
+            )}
+
+            <style>{`
+                .btn-primary { 
+                    font-size: 0.875rem; 
+                    padding: 0.5rem 1rem; 
+                    border-radius: 0.5rem; 
+                    background-color: #2563eb; 
+                    color: white;
+                    transition: background-color 0.2s;
+                }
+                .btn-primary:hover {
+                    background-color: #1d4ed8;
+                }
+            `}</style>
         </div>
     );
 };

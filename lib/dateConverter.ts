@@ -19,28 +19,32 @@ function jalaliToGregorian(jy: number, jm: number, jd: number): { gy: number; gm
         const jm = breaks[i];
         jump = jm - jp;
         if (jy < jm) {
-            leapJ += (jy - jp) / 33 * 8 + Math.floor(((jy - jp) % 33 + 3) / 4);
+            leapJ += Math.floor((jy - jp) / 33) * 8 + Math.floor(((jy - jp) % 33 + 3) / 4);
             break;
         }
-        leapJ += jump / 33 * 8 + Math.floor((jump % 33) / 4);
+        leapJ += Math.floor(jump / 33) * 8 + Math.floor((jump % 33) / 4);
     }
 
     let n = jd + (jm2 < 6 ? jm2 * 31 : jm2 * 30 + 6);
-    let leapG = gy / 4 - Math.floor((gy / 100 + 1) * 3 / 4) - 150;
+    let leapG = Math.floor(gy / 4) - Math.floor((Math.floor(gy / 100) + 1) * 3 / 4) - 150;
     let march = 20 + leapJ + leapG;
     let day = n + march;
 
     if (day > 0) {
         let gy2 = gy + Math.floor(day / 365);
         day = (day - 1) % 365;
+        gy = gy2;
     } else {
         let gy2 = gy + Math.floor(day / 365) - 1;
         day = (day - 1) % 365 + 365;
+        gy = gy2;
     }
     
     const daysInMonth = [31, (gy % 4 === 0 && gy % 100 !== 0 || gy % 400 === 0) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
     let i = 0;
-    for (; i < 12 && day >= daysInMonth[i]; i++) day -= daysInMonth[i];
+    for (; i < 12 && day >= daysInMonth[i]; i++) {
+        day -= daysInMonth[i];
+    }
 
     return { gy: gy, gm: i + 1, gd: day + 1 };
 }
@@ -65,7 +69,10 @@ export function parseJalaliDate(jalaliStr: string): Date | null {
         }
 
         const gDate = jalaliToGregorian(jy, jm, jd);
-        return new Date(gDate.gy, gDate.gm - 1, gDate.gd);
+        // We add timezone offset to make sure the date is parsed in local time, not UTC.
+        const dt = new Date(gDate.gy, gDate.gm - 1, gDate.gd);
+        // dt.setTime(dt.getTime() + dt.getTimezoneOffset()*60*1000);
+        return dt;
 
     } catch(e) {
         console.error("Error parsing Jalali date:", e);

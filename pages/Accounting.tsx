@@ -208,118 +208,194 @@ const PaymentModal: React.FC<{ supplier: Supplier; onClose: () => void }> = ({ s
 
 const LedgerModal: React.FC<{ supplier: Supplier; onClose: () => void }> = ({ supplier, onClose }) => {
     const [transactions, setTransactions] = useState<Transaction[]>([]);
+    const [isLoading, setIsLoading] = useState(true);
+    const { showNotification } = useNotification();
     
+    // --- Date Filtering State ---
+    const [filterPeriod, setFilterPeriod] = useState<'all' | 'today' | 'week' | 'month' | 'custom'>('all');
+    const [customDateInputs, setCustomDateInputs] = useState({ start: '', end: '' });
+
+    const dateRange = useMemo(() => {
+        const end = new Date();
+        const start = new Date();
+        end.setHours(23, 59, 59, 999);
+        start.setHours(0, 0, 0, 0);
+
+        switch(filterPeriod) {
+            case 'today':
+                return { start, end };
+            case 'week':
+                start.setDate(start.getDate() - 7);
+                return { start, end };
+            case 'month':
+                start.setMonth(start.getMonth() - 1);
+                return { start, end };
+            case 'custom': {
+                const customStart = customDateInputs.start ? parseJalaliDate(customDateInputs.start) : null;
+                const customEnd = customDateInputs.end ? parseJalaliDate(customDateInputs.end) : null;
+                if (customStart && customEnd && customStart > customEnd) {
+                    showNotification('تاریخ شروع نمی‌تواند بعد از تاریخ پایان باشد.', 'error');
+                    return null;
+                }
+                if (customEnd) customEnd.setHours(23, 59, 59, 999);
+                return { start: customStart, end: customEnd };
+            }
+            case 'all':
+            default:
+                return { start: null, end: null };
+        }
+    }, [filterPeriod, customDateInputs, showNotification]);
+
     useEffect(() => {
         const fetchAndProcessTransactions = async () => {
-            // JIT Sync: Fetch latest data from Supabase and cache it in Dexie before displaying.
-            if (navigator.onLine && supplier.remoteId) {
-                try {
-                    // Fetch and cache purchase invoices
-                    const { data: purchasesData } = await supabase.from('purchase_invoices').select('*').eq('supplier_id', supplier.remoteId);
-                    if (purchasesData) {
-                        const localPurchases = [];
-                        for (const p of purchasesData) {
-                            const existing = await db.purchaseInvoices.where('remoteId').equals(p.id).first();
-                            localPurchases.push({
-                                id: existing?.id,
-                                remoteId: p.id,
-                                invoiceNumber: p.invoice_number,
-                                supplierId: supplier.id!,
-                                date: p.date,
-                                items: [], // Ledger doesn't need items, so an empty array is fine.
-                                totalAmount: p.total_amount,
-                                amountPaid: p.amount_paid
-                            });
-                        }
-                        await db.purchaseInvoices.bulkPut(localPurchases);
-                    }
-
-                    // Fetch and cache payments
-                    const { data: paymentsData } = await supabase.from('payments').select('*').eq('supplier_id', supplier.remoteId);
-                    if (paymentsData) {
-                        const localPayments = [];
-                        for (const p of paymentsData) {
-                            const existing = await db.payments.where('remoteId').equals(p.id).first();
-                            localPayments.push({
-                                id: existing?.id,
-                                remoteId: p.id,
-                                supplierId: supplier.id!,
-                                amount: p.amount,
-                                date: p.date,
-                                recipientName: p.recipient_name,
-                                description: p.description
-                            });
-                        }
-                        await db.payments.bulkPut(localPayments);
-                    }
-                } catch (err) {
-                    console.error("Failed to sync ledger data from Supabase:", err);
-                    // Proceed with local data even if sync fails
-                }
+            setIsLoading(true);
+            if (!navigator.onLine || !supplier.remoteId) {
+                showNotification('این عملیات نیاز به اتصال اینترنت دارد.', 'error');
+                setIsLoading(false);
+                return;
             }
 
-            const purchases = await db.purchaseInvoices.where({ supplierId: supplier.id! }).toArray();
-            const paymentsMade = await db.payments.where({ supplierId: supplier.id! }).toArray();
-            
-            const combined = [
-                ...purchases.map(p => ({ type: 'purchase', data: p })),
-                ...paymentsMade.map(p => ({ type: 'payment', data: p })),
-            ];
+            try {
+                // JIT Sync: Fetch latest data from Supabase before displaying.
+                const [supplierRes, purchasesRes, paymentsRes] = await Promise.all([
+                    supabase.from('suppliers').select('total_debt').eq('id', supplier.remoteId).single(),
+                    supabase.from('purchase_invoices').select('*').eq('supplier_id', supplier.remoteId),
+                    supabase.from('payments').select('*').eq('supplier_id', supplier.remoteId)
+                ]);
 
-            combined.sort((a, b) => new Date(a.data.date).getTime() - new Date(b.data.date).getTime());
+                if (supplierRes.error) throw supplierRes.error;
+                if (purchasesRes.error) throw purchasesRes.error;
+                if (paymentsRes.error) throw paymentsRes.error;
 
-            const periodDebits = purchases.reduce((sum, p) => sum + p.totalAmount, 0);
-            const periodCredits = paymentsMade.reduce((sum, p) => sum + p.amount, 0);
-            const openingBalance = supplier.totalDebt - (periodDebits - periodCredits);
+                const remoteTotalDebt = supplierRes.data.total_debt;
+                await db.suppliers.update(supplier.id!, { totalDebt: remoteTotalDebt });
+                
+                const remotePurchases: PurchaseInvoice[] = purchasesRes.data.map((p: any) => ({
+                    date: p.date, invoiceNumber: p.invoice_number, totalAmount: p.total_amount, id: p.id, supplierId: supplier.id!, items: [], amountPaid: 0
+                }));
+                const remotePayments: Payment[] = paymentsRes.data.map((p: any) => ({
+                    date: p.date, amount: p.amount, recipientName: p.recipient_name, description: p.description, id: p.id, supplierId: supplier.id!
+                }));
 
-            let runningBalance = openingBalance;
-            const transactionsWithBalance: Transaction[] = [];
+                // Combine and sort all transactions by date
+                const allCombined = [
+                    ...remotePurchases.map(p => ({ type: 'purchase' as const, date: p.date, data: p })),
+                    ...remotePayments.map(p => ({ type: 'payment' as const, date: p.date, data: p })),
+                ].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+                
+                let openingBalance = remoteTotalDebt;
 
-            if (combined.length > 0 || openingBalance !== 0) {
-                transactionsWithBalance.push({
-                    date: combined.length > 0 ? new Date(new Date(combined[0].data.date).getTime() - 1).toISOString() : new Date().toISOString(),
-                    description: 'مانده اولیه',
-                    debit: 0,
-                    credit: 0,
-                    balance: openingBalance,
-                    isOpeningBalance: true,
+                // Subtract transactions from the period to find the opening balance
+                allCombined.forEach(item => {
+                    if (item.type === 'purchase') openingBalance -= item.data.totalAmount;
+                    else openingBalance += item.data.amount;
                 });
-            }
-            
-            combined.forEach(item => {
-                if (item.type === 'purchase') {
-                    const p = item.data as PurchaseInvoice;
-                    runningBalance += p.totalAmount;
-                    transactionsWithBalance.push({ date: p.date, description: `فاکتور خرید #${p.invoiceNumber || ''}`, debit: p.totalAmount, credit: 0, balance: runningBalance });
-                } else {
-                    const p = item.data as Payment;
-                    runningBalance -= p.amount;
-                    transactionsWithBalance.push({ date: p.date, description: `پرداخت به ${p.recipientName || ''}`, detail: p.description, debit: 0, credit: p.amount, balance: runningBalance });
-                }
-            });
+                
+                let runningBalance = openingBalance;
+                const processedTransactions: Transaction[] = [];
 
-            if (transactionsWithBalance.length > 1) {
-                const finalCalculatedBalance = transactionsWithBalance[transactionsWithBalance.length - 1].balance;
-                if (Math.abs(finalCalculatedBalance - supplier.totalDebt) > 0.01) {
-                    console.warn(`Ledger final balance (${finalCalculatedBalance}) does not match supplier total debt (${supplier.totalDebt}). Forcing correct balance.`);
-                    transactionsWithBalance[transactionsWithBalance.length - 1].balance = supplier.totalDebt;
+                if (Math.abs(openingBalance) > 0.001 || allCombined.length > 0) {
+                     processedTransactions.push({
+                        date: allCombined.length > 0 ? new Date(new Date(allCombined[0].date).getTime() - 1).toISOString() : new Date().toISOString(),
+                        description: 'مانده از قبل', debit: 0, credit: 0, balance: openingBalance, isOpeningBalance: true
+                    });
                 }
+
+                allCombined.forEach(item => {
+                    if (item.type === 'purchase') {
+                        const p = item.data;
+                        runningBalance += p.totalAmount;
+                        processedTransactions.push({ date: p.date, description: `فاکتور خرید #${p.invoiceNumber || ''}`, debit: p.totalAmount, credit: 0, balance: runningBalance });
+                    } else {
+                        const p = item.data;
+                        runningBalance -= p.amount;
+                        processedTransactions.push({ date: p.date, description: `پرداخت وجه`, detail: p.recipientName, debit: 0, credit: p.amount, balance: runningBalance });
+                    }
+                });
+                
+                // Filter based on date range
+                if (dateRange && (dateRange.start || dateRange.end)) {
+                    const start = dateRange.start || new Date(0);
+                    const end = dateRange.end || new Date();
+                    
+                    const beforePeriod = allCombined.filter(t => new Date(t.date) < start);
+                    let filteredOpeningBalance = remoteTotalDebt;
+                    allCombined.forEach(item => {
+                        if (new Date(item.date) >= start) {
+                             if (item.type === 'purchase') filteredOpeningBalance -= item.data.totalAmount;
+                             else filteredOpeningBalance += item.data.amount;
+                        }
+                    });
+
+                    let filteredRunningBalance = filteredOpeningBalance;
+                    const filteredTransactions: Transaction[] = [];
+
+                    if (Math.abs(filteredOpeningBalance) > 0.001 || allCombined.length > 0) {
+                        filteredTransactions.push({ date: '', description: 'مانده از قبل', debit: 0, credit: 0, balance: filteredOpeningBalance, isOpeningBalance: true });
+                    }
+                    
+                    allCombined.forEach(item => {
+                        const itemDate = new Date(item.date);
+                        if (itemDate >= start && itemDate <= end) {
+                             if (item.type === 'purchase') {
+                                filteredRunningBalance += item.data.totalAmount;
+                                filteredTransactions.push({ date: item.date, description: `فاکتور خرید #${item.data.invoiceNumber || ''}`, debit: item.data.totalAmount, credit: 0, balance: filteredRunningBalance });
+                            } else {
+                                filteredRunningBalance -= item.data.amount;
+                                filteredTransactions.push({ date: item.date, description: `پرداخت وجه`, detail: item.data.recipientName, debit: 0, credit: item.data.amount, balance: filteredRunningBalance });
+                            }
+                        }
+                    });
+                    setTransactions(filteredTransactions);
+
+                } else {
+                     setTransactions(processedTransactions);
+                }
+
+            } catch (err) {
+                console.error("Failed to sync ledger data from Supabase:", err);
+                showNotification('خطا در همگام‌سازی اطلاعات دفتر کل.', 'error');
+            } finally {
+                setIsLoading(false);
             }
-            
-            setTransactions(transactionsWithBalance);
         };
 
         fetchAndProcessTransactions();
-    }, [supplier.id, supplier.remoteId, supplier.totalDebt]);
+    }, [supplier.id, supplier.remoteId, dateRange, showNotification]);
+
+    const handleApplyCustomFilter = () => {
+        setFilterPeriod('custom'); // This will trigger the useMemo and useEffect
+    };
 
     return (
-        <Modal title={`دفتر کل: ${supplier.name}`} onClose={onClose}>
-            <PrintableSupplierLedger supplier={supplier} transactions={transactions} />
+        <Modal title={`دفتر کل حساب: ${supplier.name}`} onClose={onClose}>
+            <div className="p-4 bg-gray-700/50 rounded-lg mb-4 print-hidden">
+                 <div className="flex flex-wrap items-center gap-2 text-sm">
+                    <span className="font-semibold">فیلتر زمانی:</span>
+                    <button onClick={() => setFilterPeriod('all')} className={`btn-filter ${filterPeriod === 'all' && 'active'}`}>همه</button>
+                    <button onClick={() => setFilterPeriod('today')} className={`btn-filter ${filterPeriod === 'today' && 'active'}`}>امروز</button>
+                    <button onClick={() => setFilterPeriod('week')} className={`btn-filter ${filterPeriod === 'week' && 'active'}`}>این هفته</button>
+                    <button onClick={() => setFilterPeriod('month')} className={`btn-filter ${filterPeriod === 'month' && 'active'}`}>این ماه</button>
+                    <div className="flex items-center gap-1">
+                        <input type="text" placeholder="از: ۱۴۰۳/۰۱/۰۱" value={customDateInputs.start} onChange={e => setCustomDateInputs(p => ({...p, start: e.target.value}))} className="input-date"/>
+                        <input type="text" placeholder="تا: ۱۴۰۳/۱۲/۲۹" value={customDateInputs.end} onChange={e => setCustomDateInputs(p => ({...p, end: e.target.value}))} className="input-date"/>
+                        <button onClick={handleApplyCustomFilter} className="btn-filter-apply">اعمال</button>
+                    </div>
+                </div>
+            </div>
+            {isLoading ? <div className="text-center p-8">در حال بارگذاری و همگام‌سازی...</div> : <PrintableSupplierLedger supplier={supplier} transactions={transactions} />}
             <div className="flex justify-end gap-3 pt-4 border-t border-gray-700 print-hidden">
                 <button onClick={onClose} className="px-4 py-2 bg-gray-600 rounded-lg hover:bg-gray-500">بستن</button>
-                <button onClick={() => window.print()} className="flex items-center gap-2 px-4 py-2 bg-blue-600 rounded-lg hover:bg-blue-700"><Printer size={18}/>چاپ</button>
+                <button onClick={() => window.print()} disabled={isLoading} className="flex items-center gap-2 px-4 py-2 bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50"><Printer size={18}/>چاپ</button>
             </div>
-            <style>{`@media print { .print-hidden { display: none; } }`}</style>
+             <style>{`
+                .btn-filter { font-size: 0.8rem; padding: 0.3rem 0.8rem; border-radius: 0.5rem; background-color: #374151; color: #d1d5db; transition: background-color 0.2s; }
+                .btn-filter:hover { background-color: #4b5563; }
+                .btn-filter.active { background-color: #2563eb; color: white; }
+                .btn-filter-apply { font-size: 0.8rem; padding: 0.3rem 0.8rem; border-radius: 0.5rem; background-color: #16a34a; color: white; }
+                .input-date { background-color: #374151; border: 1px solid #4b5563; color: #d1d5db; border-radius: 0.5rem; padding: 0.25rem; font-size: 0.8rem; width: 110px; text-align: center; }
+                @media print { .print-hidden { display: none; } }
+            `}</style>
         </Modal>
     )
 };
