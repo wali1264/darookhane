@@ -59,14 +59,82 @@ const Accounting: React.FC = () => {
 };
 
 // ============================================================================
+// Supplier Form Modal
+// ============================================================================
+const SupplierFormModal: React.FC<{ supplier: Supplier | null; onClose: () => void; }> = ({ supplier, onClose }) => {
+    const [name, setName] = useState(supplier?.name || '');
+    const [contactPerson, setContactPerson] = useState(supplier?.contactPerson || '');
+    const [phone, setPhone] = useState(supplier?.phone || '');
+    const [isSaving, setIsSaving] = useState(false);
+    const { showNotification } = useNotification();
+    const isEditing = !!supplier;
+
+    const handleSubmit = async (e: FormEvent) => {
+        e.preventDefault();
+        if (!name.trim()) {
+            showNotification('نام تامین‌کننده نمی‌تواند خالی باشد.', 'error');
+            return;
+        }
+        setIsSaving(true);
+        try {
+            const dataToSave = {
+                name: name.trim(),
+                contact_person: contactPerson.trim() || null,
+                phone: phone.trim() || null,
+            };
+
+            if (isEditing && supplier?.id) {
+                const { error } = await supabase.from('suppliers').update(dataToSave).eq('id', supplier.remoteId);
+                if (error) throw error;
+                await db.suppliers.update(supplier.id, { name: dataToSave.name, contactPerson: dataToSave.contact_person, phone: dataToSave.phone });
+                await logActivity('UPDATE', 'Supplier', supplier.remoteId!, { old: supplier, new: dataToSave });
+                showNotification('اطلاعات تامین‌کننده با موفقیت ویرایش شد.', 'success');
+            } else {
+                const { data, error } = await supabase.from('suppliers').insert({ ...dataToSave, total_debt: 0 }).select().single();
+                if (error) throw error;
+                const newSupplier: Supplier = { remoteId: data.id, name: data.name, contactPerson: data.contact_person, phone: data.phone, totalDebt: 0 };
+                await db.suppliers.add(newSupplier);
+                await logActivity('CREATE', 'Supplier', newSupplier.remoteId!, { newSupplier: data });
+                showNotification('تامین‌کننده جدید با موفقیت ثبت شد.', 'success');
+            }
+            onClose();
+        } catch (err: any) {
+            console.error("Failed to save supplier:", err);
+            showNotification(`خطا در ذخیره تامین‌کننده: ${err.message}`, 'error');
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
+    return (
+        <Modal title={isEditing ? 'ویرایش تامین‌کننده' : 'ثبت تامین‌کننده جدید'} onClose={onClose}>
+            <form onSubmit={handleSubmit} className="space-y-4">
+                <input value={name} onChange={e => setName(e.target.value)} placeholder="نام تامین‌کننده" required autoFocus className="input-style" />
+                <input value={contactPerson} onChange={e => setContactPerson(e.target.value)} placeholder="شخص مسئول (اختیاری)" className="input-style" />
+                <input value={phone} onChange={e => setPhone(e.target.value)} placeholder="شماره تماس (اختیاری)" className="input-style" />
+                <div className="flex justify-end gap-3 pt-4 border-t border-gray-600">
+                    <button type="button" onClick={onClose} className="px-4 py-2 bg-gray-600 rounded-lg hover:bg-gray-500">لغو</button>
+                    <button type="submit" disabled={isSaving} className="px-4 py-2 bg-blue-600 rounded-lg hover:bg-blue-700 disabled:bg-gray-500">{isSaving ? 'در حال ذخیره...' : (isEditing ? 'ذخیره تغییرات' : 'ثبت')}</button>
+                </div>
+                <style>{`.input-style { background-color: #1f2937; border: 1px solid #4b5563; color: #d1d5db; border-radius: 0.5rem; padding: 0.75rem; width: 100%; }`}</style>
+            </form>
+        </Modal>
+    );
+};
+
+
+// ============================================================================
 // Supplier Accounts Section
 // ============================================================================
 const SupplierAccounts: React.FC = () => {
     const suppliers = useLiveQuery(() => db.suppliers.orderBy('name').toArray());
     const [selectedSupplier, setSelectedSupplier] = useState<Supplier | null>(null);
+    const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
     const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
     const [isLedgerModalOpen, setIsLedgerModalOpen] = useState(false);
+    const [isSupplierModalOpen, setIsSupplierModalOpen] = useState(false);
     const isOnline = useOnlineStatus();
+    const { showNotification } = useNotification();
 
     const openPaymentModal = (supplier: Supplier) => {
         setSelectedSupplier(supplier);
@@ -77,40 +145,91 @@ const SupplierAccounts: React.FC = () => {
         setSelectedSupplier(supplier);
         setIsLedgerModalOpen(true);
     };
+    
+    const openSupplierModalForNew = () => {
+        setEditingSupplier(null);
+        setIsSupplierModalOpen(true);
+    };
+
+    const openSupplierModalForEdit = (supplier: Supplier) => {
+        setEditingSupplier(supplier);
+        setIsSupplierModalOpen(true);
+    };
+
+    const handleDeleteSupplier = async (supplier: Supplier) => {
+        if (!supplier.id || !isOnline) return;
+
+        if (Math.abs(supplier.totalDebt) > 0.01) {
+            showNotification('امکان حذف تامین‌کننده‌ای که دارای بدهی یا بستانکاری است وجود ندارد.', 'error');
+            return;
+        }
+
+        if (window.confirm(`آیا از حذف تامین‌کننده "${supplier.name}" مطمئن هستید؟`)) {
+            try {
+                const { error } = await supabase.from('suppliers').delete().eq('id', supplier.remoteId);
+                if (error) throw error;
+                await db.suppliers.delete(supplier.id);
+                await logActivity('DELETE', 'Supplier', supplier.remoteId!, { deletedSupplier: supplier });
+                showNotification('تامین‌کننده با موفقیت حذف شد.', 'success');
+            } catch (err: any) {
+                console.error("Failed to delete supplier:", err);
+                showNotification(`خطا در حذف: ${err.message}`, 'error');
+            }
+        }
+    };
 
     const closeModal = () => {
         setSelectedSupplier(null);
+        setEditingSupplier(null);
         setIsPaymentModalOpen(false);
         setIsLedgerModalOpen(false);
+        setIsSupplierModalOpen(false);
     };
 
     return (
-        <div className="bg-gray-800 rounded-lg shadow-lg overflow-hidden border border-gray-700">
-            <table className="w-full text-sm text-right text-gray-300">
-                <thead className="text-xs text-gray-400 uppercase bg-gray-700/50">
-                    <tr>
-                        <th className="px-6 py-3">نام تامین‌کننده</th>
-                        <th className="px-6 py-3">بدهی کل</th>
-                        <th className="px-6 py-3 text-center">عملیات</th>
-                    </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-700">
-                    {suppliers?.map(supplier => (
-                        <tr key={supplier.id}>
-                            <td className="px-6 py-4 font-medium text-white">{supplier.name}</td>
-                            <td className={`px-6 py-4 font-bold ${supplier.totalDebt > 0 ? 'text-yellow-400' : 'text-green-400'}`}>
-                                ${supplier.totalDebt.toFixed(2)}
-                            </td>
-                            <td className="px-6 py-4 flex items-center justify-center gap-4">
-                                <button onClick={() => openLedgerModal(supplier)} className="flex items-center gap-2 text-sm text-gray-300 hover:text-white" title="مشاهده دفتر کل"><Eye size={16} /> مشاهده دفتر کل</button>
-                                <button onClick={() => openPaymentModal(supplier)} disabled={!isOnline} className="flex items-center gap-2 text-sm px-3 py-1.5 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:bg-gray-500 disabled:cursor-not-allowed" title={!isOnline ? "این عملیات در حالت آفلاین در دسترس نیست" : "ثبت پرداخت"}><Plus size={14} /> ثبت پرداخت</button>
-                            </td>
+        <div className="bg-gray-800 rounded-lg shadow-lg border border-gray-700">
+             <div className="p-4 flex justify-between items-center border-b border-gray-700">
+                <h3 className="text-xl font-bold text-white">لیست تامین‌کنندگان</h3>
+                <button
+                    onClick={openSupplierModalForNew}
+                    disabled={!isOnline}
+                    title={!isOnline ? "این عملیات در حالت آفلاین در دسترس نیست" : "ثبت تامین‌کننده جدید"}
+                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:bg-gray-500 disabled:cursor-not-allowed"
+                >
+                    <Plus size={20} />
+                    <span>ثبت تامین‌کننده جدید</span>
+                </button>
+            </div>
+            <div className="overflow-x-auto">
+                <table className="w-full text-sm text-right text-gray-300">
+                    <thead className="text-xs text-gray-400 uppercase bg-gray-700/50">
+                        <tr>
+                            <th className="px-6 py-3">نام تامین‌کننده</th>
+                            <th className="px-6 py-3">بدهی کل</th>
+                            <th className="px-6 py-3 text-center">عملیات</th>
                         </tr>
-                    ))}
-                </tbody>
-            </table>
+                    </thead>
+                    <tbody className="divide-y divide-gray-700">
+                        {suppliers?.map(supplier => (
+                            <tr key={supplier.id}>
+                                <td className="px-6 py-4 font-medium text-white">{supplier.name}</td>
+                                <td className={`px-6 py-4 font-bold ${supplier.totalDebt > 0 ? 'text-yellow-400' : 'text-green-400'}`}>
+                                    ${supplier.totalDebt.toFixed(2)}
+                                </td>
+                                <td className="px-6 py-4 flex items-center justify-center gap-4">
+                                    <button onClick={() => openLedgerModal(supplier)} disabled={!isOnline} className="flex items-center gap-2 text-sm text-gray-300 hover:text-white disabled:text-gray-600 disabled:cursor-not-allowed" title="مشاهده دفتر کل"><Eye size={16} /> </button>
+                                    <button onClick={() => openPaymentModal(supplier)} disabled={!isOnline} className="flex items-center gap-2 text-sm text-green-400 hover:text-green-300 disabled:text-gray-600 disabled:cursor-not-allowed" title="ثبت پرداخت"><Plus size={14} /> </button>
+                                    <button onClick={() => openSupplierModalForEdit(supplier)} disabled={!isOnline} className="text-blue-400 hover:text-blue-300 disabled:text-gray-600 disabled:cursor-not-allowed" title="ویرایش"><Edit size={16} /></button>
+                                    <button onClick={() => handleDeleteSupplier(supplier)} disabled={!isOnline} className="text-red-400 hover:text-red-300 disabled:text-gray-600 disabled:cursor-not-allowed" title="حذف"><Trash2 size={16} /></button>
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
             {isPaymentModalOpen && selectedSupplier && <PaymentModal supplier={selectedSupplier} onClose={closeModal} />}
             {isLedgerModalOpen && selectedSupplier && <LedgerModal supplier={selectedSupplier} onClose={closeModal} />}
+            {isSupplierModalOpen && <SupplierFormModal supplier={editingSupplier} onClose={closeModal} />}
         </div>
     );
 };
@@ -142,32 +261,34 @@ const PaymentModal: React.FC<{ supplier: Supplier; onClose: () => void }> = ({ s
         setIsSaving(true);
         try {
             const paymentData = {
-                p_supplier_id: supplier.remoteId!,
+                p_supplier_id_remote: supplier.remoteId!,
                 p_amount: Number(amount),
                 p_recipient_name: recipientName,
                 p_description: description,
-                p_date: new Date().toISOString(),
             };
 
-            const { data, error } = await supabase.rpc('create_payment_transaction', paymentData);
+            const { data, error } = await supabase.rpc('create_supplier_payment_transaction', paymentData);
 
             if (error || !data.success) {
                 throw new Error(data?.message || error?.message);
             }
             
             // On success, update local supplier debt and add payment record for UI
-            await db.suppliers.update(supplier.id!, { totalDebt: supplier.totalDebt - Number(amount) });
+            const updatedSupplier = data.updated_supplier;
+            await db.suppliers.update(supplier.id!, { totalDebt: updatedSupplier.total_debt });
+            
+            const newPaymentRemote = data.new_payment;
             const newPayment: Payment = {
-                remoteId: data.new_payment_id,
+                remoteId: newPaymentRemote.id,
                 supplierId: supplier.id!,
-                amount: Number(amount),
-                date: paymentData.p_date,
-                recipientName,
-                description,
+                amount: newPaymentRemote.amount,
+                date: newPaymentRemote.date,
+                recipientName: newPaymentRemote.recipient_name,
+                description: newPaymentRemote.description,
             };
             await db.payments.add(newPayment);
 
-            await logActivity('CREATE', 'Payment', data.new_payment_id, { payment: newPayment });
+            await logActivity('CREATE', 'Payment', newPayment.remoteId!, { payment: newPayment });
             showNotification('پرداخت با موفقیت ثبت شد.', 'success');
             setPaymentToPrint(newPayment); // Trigger print view
         } catch (error: any) {
@@ -282,25 +403,36 @@ const LedgerModal: React.FC<{ supplier: Supplier; onClose: () => void }> = ({ su
                     ...remotePayments.map(p => ({ type: 'payment' as const, date: p.date, data: p })),
                 ].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
                 
-                let openingBalance = remoteTotalDebt;
+                // Filter based on date range before processing balances
+                const filteredCombined = dateRange && (dateRange.start || dateRange.end)
+                    ? allCombined.filter(item => {
+                        const itemDate = new Date(item.date);
+                        const startOk = !dateRange.start || itemDate >= dateRange.start;
+                        const endOk = !dateRange.end || itemDate <= dateRange.end;
+                        return startOk && endOk;
+                    })
+                    : allCombined;
 
-                // Subtract transactions from the period to find the opening balance
+                // Calculate opening balance for the filtered period
+                let openingBalance = remoteTotalDebt;
                 allCombined.forEach(item => {
-                    if (item.type === 'purchase') openingBalance -= item.data.totalAmount;
-                    else openingBalance += item.data.amount;
+                    if (new Date(item.date) >= (dateRange?.start || new Date(0))) {
+                        if (item.type === 'purchase') openingBalance -= item.data.totalAmount;
+                        else openingBalance += item.data.amount;
+                    }
                 });
                 
                 let runningBalance = openingBalance;
                 const processedTransactions: Transaction[] = [];
 
-                if (Math.abs(openingBalance) > 0.001 || allCombined.length > 0) {
+                if (Math.abs(openingBalance) > 0.001 || filteredCombined.length > 0) {
                      processedTransactions.push({
-                        date: allCombined.length > 0 ? new Date(new Date(allCombined[0].date).getTime() - 1).toISOString() : new Date().toISOString(),
+                        date: filteredCombined.length > 0 ? new Date(new Date(filteredCombined[0].date).getTime() - 1).toISOString() : new Date().toISOString(),
                         description: 'مانده از قبل', debit: 0, credit: 0, balance: openingBalance, isOpeningBalance: true
                     });
                 }
 
-                allCombined.forEach(item => {
+                filteredCombined.forEach(item => {
                     if (item.type === 'purchase') {
                         const p = item.data;
                         runningBalance += p.totalAmount;
@@ -312,44 +444,7 @@ const LedgerModal: React.FC<{ supplier: Supplier; onClose: () => void }> = ({ su
                     }
                 });
                 
-                // Filter based on date range
-                if (dateRange && (dateRange.start || dateRange.end)) {
-                    const start = dateRange.start || new Date(0);
-                    const end = dateRange.end || new Date();
-                    
-                    const beforePeriod = allCombined.filter(t => new Date(t.date) < start);
-                    let filteredOpeningBalance = remoteTotalDebt;
-                    allCombined.forEach(item => {
-                        if (new Date(item.date) >= start) {
-                             if (item.type === 'purchase') filteredOpeningBalance -= item.data.totalAmount;
-                             else filteredOpeningBalance += item.data.amount;
-                        }
-                    });
-
-                    let filteredRunningBalance = filteredOpeningBalance;
-                    const filteredTransactions: Transaction[] = [];
-
-                    if (Math.abs(filteredOpeningBalance) > 0.001 || allCombined.length > 0) {
-                        filteredTransactions.push({ date: '', description: 'مانده از قبل', debit: 0, credit: 0, balance: filteredOpeningBalance, isOpeningBalance: true });
-                    }
-                    
-                    allCombined.forEach(item => {
-                        const itemDate = new Date(item.date);
-                        if (itemDate >= start && itemDate <= end) {
-                             if (item.type === 'purchase') {
-                                filteredRunningBalance += item.data.totalAmount;
-                                filteredTransactions.push({ date: item.date, description: `فاکتور خرید #${item.data.invoiceNumber || ''}`, debit: item.data.totalAmount, credit: 0, balance: filteredRunningBalance });
-                            } else {
-                                filteredRunningBalance -= item.data.amount;
-                                filteredTransactions.push({ date: item.date, description: `پرداخت وجه`, detail: item.data.recipientName, debit: 0, credit: item.data.amount, balance: filteredRunningBalance });
-                            }
-                        }
-                    });
-                    setTransactions(filteredTransactions);
-
-                } else {
-                     setTransactions(processedTransactions);
-                }
+                setTransactions(processedTransactions);
 
             } catch (err) {
                 console.error("Failed to sync ledger data from Supabase:", err);
