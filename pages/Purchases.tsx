@@ -34,6 +34,15 @@ const Purchases: React.FC = () => {
         }
         setIsLoading(true);
         try {
+            // FIX: Fetch local drugs first to create a map for translating remote IDs to local IDs.
+            const localDrugs = await db.drugs.toArray();
+            const drugRemoteIdToLocalIdMap = new Map<number, number>();
+            localDrugs.forEach(drug => {
+                if (drug.remoteId && drug.id) {
+                    drugRemoteIdToLocalIdMap.set(drug.remoteId, drug.id);
+                }
+            });
+            
             const { data: invoicesData, error: invoicesError } = await supabase
                 .from('purchase_invoices')
                 .select('*, purchase_invoice_items(*)')
@@ -49,14 +58,18 @@ const Purchases: React.FC = () => {
                 supplierId: inv.supplier_id,
                 totalAmount: inv.total_amount,
                 amountPaid: inv.amount_paid,
-                items: inv.purchase_invoice_items.map((item: any) => ({
-                    drugId: item.drug_id,
-                    name: item.name,
-                    quantity: item.quantity,
-                    purchasePrice: item.purchase_price,
-                    lotNumber: item.lot_number,
-                    expiryDate: item.expiry_date,
-                }))
+                items: inv.purchase_invoice_items.map((item: any) => {
+                    const localDrugId = drugRemoteIdToLocalIdMap.get(item.drug_id);
+                    // FIX: Use the mapped local drugId. If not found, it will be undefined, which helps in debugging.
+                    return {
+                        drugId: localDrugId, // CRITICAL FIX: Use the correct local ID.
+                        name: item.name,
+                        quantity: item.quantity,
+                        purchasePrice: item.purchase_price,
+                        lotNumber: item.lot_number,
+                        expiryDate: item.expiry_date,
+                    }
+                }).filter((item: any) => item.drugId !== undefined) // Filter out items where the drug was not found locally
             }));
             setPurchaseInvoices(formattedInvoices);
 
