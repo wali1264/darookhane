@@ -185,7 +185,6 @@ const PaymentModal: React.FC<{ supplier: Supplier; onClose: () => void }> = ({ s
                     <button onClick={onClose} className="px-4 py-2 bg-gray-600 rounded-lg hover:bg-gray-500">بستن</button>
                     <button onClick={() => window.print()} className="flex items-center gap-2 px-4 py-2 bg-blue-600 rounded-lg hover:bg-blue-700"><Printer size={18}/>چاپ</button>
                 </div>
-                <style>{`@media print { .print-hidden { display: none; } }`}</style>
             </Modal>
         )
     }
@@ -394,7 +393,6 @@ const LedgerModal: React.FC<{ supplier: Supplier; onClose: () => void }> = ({ su
                 .btn-filter.active { background-color: #2563eb; color: white; }
                 .btn-filter-apply { font-size: 0.8rem; padding: 0.3rem 0.8rem; border-radius: 0.5rem; background-color: #16a34a; color: white; }
                 .input-date { background-color: #374151; border: 1px solid #4b5563; color: #d1d5db; border-radius: 0.5rem; padding: 0.25rem; font-size: 0.8rem; width: 110px; text-align: center; }
-                @media print { .print-hidden { display: none; } }
             `}</style>
         </Modal>
     )
@@ -562,7 +560,6 @@ const ClinicFund: React.FC = () => {
                     <button onClick={() => setTicketToPrint(null)} className="px-4 py-2 bg-gray-600 rounded-lg hover:bg-gray-500">بستن</button>
                     <button onClick={() => window.print()} className="flex items-center gap-2 px-4 py-2 bg-blue-600 rounded-lg hover:bg-blue-700"><Printer size={18}/>چاپ</button>
                 </div>
-                <style>{`@media print { .print-hidden { display: none; } }`}</style>
             </Modal>
         );
     }
@@ -1253,7 +1250,7 @@ const ColumnManagerModal: React.FC<{ columns: SimpleAccountingColumn[], onClose:
             showNotification("ستون حذف شد.", "success");
             onSave();
         } catch (err: any) {
-            showNotification(`خطا در حذف ستون: ${err.message}`, "error");
+            showNotification(`خطا در حذف ستون: ${err.message}`, 'error');
         }
     };
 

@@ -476,42 +476,15 @@ const PrintPreviewModal: React.FC<{ title: string; onClose: () => void; children
             </div>
             <style>{`
                 @media print {
-                    @page {
-                        size: A4;
-                        margin: 1cm;
-                    }
-                    body {
-                        -webkit-print-color-adjust: exact !important;
-                        color-adjust: exact !important;
-                    }
-                    body * {
-                        visibility: hidden;
-                    }
-                    .printable-area, .printable-area * {
-                        visibility: visible;
-                    }
                     .printable-area {
-                        position: absolute;
-                        left: 0;
-                        top: 0;
-                        width: 100%;
-                        font-size: 11pt;
+                        background: white !important;
+                        color: black !important;
                     }
-                    .printable-area .report-content-wrapper {
+                    /* Content-specific print styles should be in the child components */
+                    .report-content-wrapper {
                         max-height: none !important;
                         overflow: visible !important;
                     }
-                     .printable-area h3, .printable-area h4 {
-                        color: black !important;
-                        border-color: #ccc !important;
-                     }
-                    .printable-area .bg-gray-800, .printable-area .bg-gray-700\\/50, .printable-area .bg-gray-900, .printable-area .bg-gray-700, .printable-area .bg-gray-900\\/50 {
-                        background-color: transparent !important;
-                        border: none !important;
-                    }
-                     .printable-area .text-gray-400, .printable-area .text-gray-500, .printable-area .text-gray-300 { color: #555 !important; }
-                     .printable-area .divide-y > :not([hidden]) ~ :not([hidden]), .printable-area .border-gray-700 { border-color: #ddd !important; }
-                     .printable-area .text-white { color: black !important; }
                 }
             `}</style>
         </Modal>

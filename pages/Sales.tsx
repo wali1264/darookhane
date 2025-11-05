@@ -440,13 +440,6 @@ const InvoiceModal: React.FC<{invoice: SaleInvoice, onClose: () => void}> = ({in
                         <span>چاپ</span>
                     </button>
                 </div>
-                 <style>{`
-                    @media print {
-                        .print-hidden {
-                            display: none;
-                        }
-                    }
-                 `}</style>
             </div>
         </Modal>
     );

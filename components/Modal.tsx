@@ -11,14 +11,14 @@ interface ModalProps {
 const Modal: React.FC<ModalProps> = ({ title, onClose, children, headerContent }) => {
   return (
     <div 
-      className="fixed inset-0 bg-black bg-opacity-70 z-50 flex justify-center items-center p-4 modal-backdrop print:bg-transparent print:p-0"
+      className="fixed inset-0 bg-black bg-opacity-70 z-50 flex justify-center items-center p-4 modal-backdrop"
       onClick={onClose}
     >
       <div 
-        className="bg-gray-800 rounded-lg shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col border border-gray-600 animate-fade-in-up modal-content-wrapper print:shadow-none print:border-none print:bg-transparent print:w-full print:h-full print:max-h-full"
+        className="bg-gray-800 rounded-lg shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col border border-gray-600 animate-fade-in-up modal-content-wrapper"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex justify-between items-center p-4 border-b border-gray-700 print:hidden">
+        <div className="flex justify-between items-center p-4 border-b border-gray-700 print-hidden">
           <div className="flex items-center gap-4">
             <h2 className="text-xl font-bold text-white">{title}</h2>
             {headerContent}
@@ -30,7 +30,7 @@ const Modal: React.FC<ModalProps> = ({ title, onClose, children, headerContent }
             <X size={24} />
           </button>
         </div>
-        <div className="p-6 overflow-y-auto modal-content print:p-0 print:overflow-visible">
+        <div className="p-6 overflow-y-auto modal-content">
           {children}
         </div>
       </div>
@@ -44,23 +44,47 @@ const Modal: React.FC<ModalProps> = ({ title, onClose, children, headerContent }
         }
 
         @media print {
-          /* Hide all direct children of body except our modal backdrop */
-          body > *:not(.modal-backdrop) {
-            display: none !important;
+          /* 1. Hide everything on the page by default */
+          body > * {
+            visibility: hidden !important;
+          }
+
+          /* 2. Make the specific modal instance and its children visible */
+          .modal-backdrop, .modal-backdrop * {
+            visibility: visible !important;
           }
           
-          /* Reset the entire modal structure to be simple block elements for printing */
-          .modal-backdrop,
-          .modal-content-wrapper,
-          .modal-content {
-            position: static !important;
-            display: block !important;
-            width: auto !important;
+          /* 3. Reset the modal's position and appearance to be a normal document */
+          .modal-backdrop {
+            position: absolute !important;
+            left: 0 !important;
+            top: 0 !important;
+            width: 100% !important;
             height: auto !important;
-            max-width: none !important;
-            max-height: none !important;
-            overflow: visible !important;
+            padding: 0 !important;
             background: transparent !important;
+            border: none !important;
+            overflow: visible !important;
+          }
+          .modal-content-wrapper {
+            width: 100% !important;
+            max-width: none !important;
+            height: auto !important;
+            max-height: none !important;
+            box-shadow: none !important;
+            border: none !important;
+            animation: none !important;
+            overflow: visible !important;
+          }
+          .modal-content {
+             padding: 0 !important;
+             overflow: visible !important;
+             height: auto !important;
+          }
+
+          /* 4. Hide elements specifically marked not to be printed (like buttons) */
+          .print-hidden {
+            display: none !important;
           }
         }
       `}</style>

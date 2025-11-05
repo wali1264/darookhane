@@ -72,25 +72,13 @@ const PrintableInvoice = React.forwardRef<HTMLDivElement, PrintableInvoiceProps>
             size: A4;
             margin: 1cm;
           }
-          body {
-            -webkit-print-color-adjust: exact !important;
-            color-adjust: exact !important;
-          }
-          body * {
-            visibility: hidden;
-          }
-          .printable-area, .printable-area * {
-            visibility: visible;
-          }
           .printable-area {
-            position: absolute;
-            left: 0;
-            top: 0;
-            width: 100%;
             font-size: 12pt;
           }
           .bg-gray-100 {
             background-color: #f3f4f6 !important;
+            -webkit-print-color-adjust: exact !important;
+            color-adjust: exact !important;
           }
         }
       `}</style>

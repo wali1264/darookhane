@@ -183,7 +183,6 @@ const PrintModal: React.FC<{ invoice: PurchaseInvoice, supplierName: string, onC
                         <span>چاپ</span>
                     </button>
                 </div>
-                 <style>{`@media print { .print-hidden { display: none; } }`}</style>
             </div>
         </Modal>
     );
