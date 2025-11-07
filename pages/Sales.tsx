@@ -1,8 +1,8 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
 import { Drug, SaleItem, SaleInvoice } from '../types';
-import { Search, X, Plus, Minus, Printer, Edit, History, Filter, XCircle } from 'lucide-react';
+import { Search, X, Plus, Minus, Printer, Edit, History, Filter, XCircle, Barcode } from 'lucide-react';
 import Modal from '../components/Modal';
 import PrintableInvoice from '../components/PrintableInvoice';
 import { useVoiceInput } from '../hooks/useVoiceInput';
@@ -27,6 +27,7 @@ const Sales: React.FC = () => {
     const [editingInvoice, setEditingInvoice] = useState<SaleInvoice | null>(null);
     const [dateFilter, setDateFilter] = useState<{ start: string | null, end: string | null }>({ start: null, end: null });
     const [customDateInputs, setCustomDateInputs] = useState({ start: '', end: '' });
+    const [isScanModeActive, setIsScanModeActive] = useState(false);
 
     const { hasPermission } = useAuth();
     const { showNotification } = useNotification();
@@ -60,7 +61,7 @@ const Sales: React.FC = () => {
     const voiceControls = useVoiceInput({ onTranscript: handleVoiceTranscript });
 
     const filteredDrugs = useMemo(() => {
-        if (!searchTerm) return [];
+        if (!searchTerm || isScanModeActive) return []; // Don't show dropdown in scan mode
         if (!drugs) return [];
         const lowerCaseSearchTerm = searchTerm.toLowerCase().split(' ').filter(Boolean);
         if (lowerCaseSearchTerm.length === 0) return [];
@@ -72,7 +73,7 @@ const Sales: React.FC = () => {
             
             return (nameMatch || barcodeMatch) && drug.totalStock > 0;
         }).slice(0, 5);
-    }, [searchTerm, drugs]);
+    }, [searchTerm, drugs, isScanModeActive]);
 
 
     const addToCart = (drug: Drug) => {
@@ -92,6 +93,20 @@ const Sales: React.FC = () => {
         }
         setSearchTerm('');
     };
+
+    useEffect(() => {
+        if (isScanModeActive && searchTerm.trim() !== '') {
+            const matchedDrug = drugs?.find(d => 
+                (d.barcode && d.barcode === searchTerm.trim()) || 
+                (d.internalBarcode && d.internalBarcode === searchTerm.trim())
+            );
+
+            if (matchedDrug) {
+                addToCart(matchedDrug);
+                // The search term is cleared inside addToCart, which re-triggers this effect with an empty string, stopping the loop.
+            }
+        }
+    }, [searchTerm, isScanModeActive, drugs]); // This will run whenever searchTerm changes in scan mode
 
     const updateQuantity = (drugId: number, quantity: number) => {
         const drugInStock = drugs?.find(d => d.id === drugId);
@@ -367,7 +382,16 @@ const Sales: React.FC = () => {
             <div className="bg-gray-800 p-6 rounded-lg border border-gray-700 flex flex-col">
                 <div className="flex justify-between items-center mb-4 border-b border-gray-600 pb-3">
                     <h3 className="text-xl font-bold text-white">سبد خرید</h3>
-                    <VoiceControlHeader {...voiceControls} />
+                    <div className="flex items-center gap-2">
+                         <button 
+                            onClick={() => setIsScanModeActive(prev => !prev)}
+                            title={isScanModeActive ? 'غیرفعال کردن حالت اسکن' : 'فعال کردن حالت اسکن برای فروش'}
+                            className={`p-2 rounded-full transition-colors ${isScanModeActive ? 'bg-blue-600 text-white' : 'bg-gray-600 text-gray-300 hover:bg-gray-500'}`}
+                        >
+                            <Barcode size={20} />
+                        </button>
+                        <VoiceControlHeader {...voiceControls} />
+                    </div>
                 </div>
                 <div className="flex-grow space-y-3 overflow-y-auto pr-2 -mr-2">
                     {cart.length === 0 && <p className="text-gray-500 text-center mt-8">سبد خرید خالی است.</p>}
