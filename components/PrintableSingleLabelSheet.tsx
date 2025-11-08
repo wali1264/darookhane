@@ -1,6 +1,6 @@
 import React from 'react';
 import { Drug } from '../types';
-import BarcodeSVG from './BarcodeSVG';
+import QRCodeSVG from './QRCodeSVG'; // Changed from BarcodeSVG to QRCodeSVG
 
 interface PrintableSingleLabelSheetProps {
     drug: Drug;
@@ -14,8 +14,8 @@ const PrintableSingleLabelSheet: React.FC<PrintableSingleLabelSheetProps> = ({ d
             <div className="label-preview-container">
                 {Array.from({ length: count }).map((_, index) => (
                     <div key={index} className="label">
-                        <div className="label-barcode-wrapper">
-                            {drug.internalBarcode && <BarcodeSVG value={drug.internalBarcode} />}
+                        <div className="label-qrcode-wrapper">
+                            {drug.internalBarcode && <QRCodeSVG value={drug.internalBarcode} />}
                         </div>
                     </div>
                 ))}
@@ -24,28 +24,30 @@ const PrintableSingleLabelSheet: React.FC<PrintableSingleLabelSheetProps> = ({ d
                 /* For screen preview only */
                 .label-preview-container {
                     display: grid;
-                    grid-template-columns: repeat(auto-fill, minmax(8cm, 1fr));
+                    grid-template-columns: repeat(auto-fill, minmax(6cm, 1fr));
                     gap: 0.5cm;
                 }
                 .label {
                     border: 1px dashed #ccc;
                     padding: 0.2cm;
                     display: flex;
+                    flex-direction: column;
                     align-items: center;
                     justify-content: center;
                     background-color: white;
-                    aspect-ratio: 4 / 3; /* A fixed aspect ratio for preview */
+                    aspect-ratio: 1 / 1; /* Square aspect ratio for QR Code */
                 }
-                .label-barcode-wrapper {
+                .label-qrcode-wrapper {
                     width: 100%;
                     height: 100%;
                     display: flex;
+                    flex-direction: column;
                     align-items: center;
                     justify-content: center;
                 }
-                .label-barcode-wrapper svg {
-                    max-width: 100%;
-                    max-height: 100%;
+                .label-qrcode-wrapper svg {
+                    max-width: 90%;
+                    max-height: 90%;
                 }
 
                 @media print {
@@ -58,7 +60,6 @@ const PrintableSingleLabelSheet: React.FC<PrintableSingleLabelSheetProps> = ({ d
                         margin: 0;
                     }
 
-                    /* Remove any body margin that might interfere */
                     body, html {
                         margin: 0 !important;
                         padding: 0 !important;
@@ -72,14 +73,11 @@ const PrintableSingleLabelSheet: React.FC<PrintableSingleLabelSheetProps> = ({ d
                         margin: 0;
                         padding: 0.2cm; /* Keep a small quiet zone */
                         box-sizing: border-box;
-
-                        /* Force each label onto a new page */
-                        page-break-after: always;
                     }
 
-                    /* This is the fix: Do not add a page break after the very last label */
-                    .label:last-of-type {
-                        page-break-after: auto;
+                    /* THE FIX: Create a new page BEFORE each label, except for the very first one. */
+                    .label:not(:first-of-type) {
+                        page-break-before: always;
                     }
                 }
             `}</style>
