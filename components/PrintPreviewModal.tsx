@@ -23,7 +23,6 @@ const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({ title, onClose, c
                     .printable-area {
                         background: white !important;
                         color: black !important;
-                        padding: 0 !important; /* Remove padding for print to avoid overflow */
                     }
                 }
             `}</style>
