@@ -1,6 +1,6 @@
 import React from 'react';
 import { Drug } from '../types';
-import QRCodeSVG from './QRCodeSVG';
+import QRCodeSVG from './QRCodeSVG'; // Changed from BarcodeSVG to QRCodeSVG
 
 interface PrintableSingleLabelSheetProps {
     drug: Drug;
@@ -10,7 +10,7 @@ interface PrintableSingleLabelSheetProps {
 const PrintableSingleLabelSheet: React.FC<PrintableSingleLabelSheetProps> = ({ drug, count }) => {
     return (
         <>
-            {/* This container is for screen preview and printing. */}
+            {/* This container is for screen preview only. On print, each .label becomes its own page. */}
             <div className="label-preview-container">
                 {Array.from({ length: count }).map((_, index) => (
                     <div key={index} className="label">
@@ -36,12 +36,12 @@ const PrintableSingleLabelSheet: React.FC<PrintableSingleLabelSheetProps> = ({ d
                     justify-content: center;
                     background-color: white;
                     aspect-ratio: 1 / 1; /* Square aspect ratio for QR Code */
-                    box-sizing: border-box;
                 }
                 .label-qrcode-wrapper {
                     width: 100%;
                     height: 100%;
                     display: flex;
+                    flex-direction: column;
                     align-items: center;
                     justify-content: center;
                 }
@@ -51,63 +51,33 @@ const PrintableSingleLabelSheet: React.FC<PrintableSingleLabelSheetProps> = ({ d
                 }
 
                 @media print {
-                    /* Reset container for printing */
                     .label-preview-container {
-                        display: block;
-                        margin: 0;
-                        padding: 0;
+                        display: block; /* Let labels flow naturally */
                     }
 
                     @page {
-                        size: auto;  /* Let printer driver determine size */
-                        margin: 5mm; /* A reasonable default margin */
+                        /* Size is inherited from user's printer settings. */
+                        margin: 0;
                     }
 
-                    html, body {
+                    body, html {
                         margin: 0 !important;
                         padding: 0 !important;
                         background: white !important;
-                        width: 100%;
-                        height: 100%;
                     }
 
-                    /* Make each label a full page */
                     .label {
-                        width: 100%;
-                        height: 100%;
-                        padding: 0;
+                        width: 100vw;
+                        height: 100vh;
                         border: none;
-                        display: flex;
-                        align-items: center;
-                        justify-content: center;
+                        margin: 0;
+                        padding: 0.2cm; /* Keep a small quiet zone */
                         box-sizing: border-box;
-                        
-                        /* Standard page break logic */
-                        page-break-inside: avoid;
-                        page-break-before: always;
-                    }
-                    
-                    /* CRITICAL: Prevent the very first label from creating a blank page */
-                    .label-preview-container > .label:first-child {
-                        page-break-before: auto;
-                    }
-                    
-                    /* Ensure the last element doesn't cause an extra page */
-                     .label-preview-container > .label:last-child {
-                        page-break-after: auto;
                     }
 
-                    .label-qrcode-wrapper {
-                        width: 100%;
-                        height: 100%;
-                        padding: 2%; /* Add some padding so QR isn't touching edge */
-                        box-sizing: border-box;
-                    }
-                    
-                    .label-qrcode-wrapper svg {
-                        width: 100%;
-                        height: 100%;
-                        object-fit: contain;
+                    /* THE FIX: Create a new page BEFORE each label, except for the very first one. */
+                    .label:not(:first-of-type) {
+                        page-break-before: always;
                     }
                 }
             `}</style>
