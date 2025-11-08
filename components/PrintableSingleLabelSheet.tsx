@@ -52,14 +52,16 @@ const PrintableSingleLabelSheet: React.FC<PrintableSingleLabelSheetProps> = ({ d
                 }
 
                 @media print {
+                    /* Reset container styles for printing */
                     .label-preview-container {
-                        display: block; /* Stack labels vertically */
+                        display: block;
                     }
 
+                    /* General page setup for printing */
                     @page {
-                        /* Let the user define paper size and margins in the print dialog */
-                        size: auto;
-                        margin: 0mm;
+                        /* User should set the actual paper size in the print dialog. 
+                           We suggest minimal margins. */
+                        margin: 2mm;
                     }
 
                     body, html {
@@ -68,12 +70,35 @@ const PrintableSingleLabelSheet: React.FC<PrintableSingleLabelSheetProps> = ({ d
                         background: white !important;
                     }
 
+                    /* Critical: Style each label as a separate print page */
                     .label {
-                        width: 100%; /* Fill the width of the label paper */
-                        height: auto;
-                        /* The aspect-ratio from screen styles will maintain the square shape */
-                        page-break-inside: avoid; /* Prevent a label from splitting across pages */
-                        border: none; /* No border for the actual print */
+                        width: 5cm;   /* Define a fixed, logical size */
+                        height: 5cm;
+                        padding: 0;
+                        border: none;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        
+                        /* Force each label onto a new page */
+                        page-break-after: always;
+                        page-break-inside: avoid;
+                    }
+
+                    /* Prevent the very last label from creating an extra blank page */
+                    .label-preview-container > .label:last-child {
+                        page-break-after: auto;
+                    }
+
+                    .label-qrcode-wrapper {
+                        width: 100%;
+                        height: 100%;
+                    }
+                    
+                    .label-qrcode-wrapper svg {
+                        width: 95%;
+                        height: 95%;
+                        object-fit: contain;
                     }
                 }
             `}</style>
