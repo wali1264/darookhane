@@ -21,7 +21,8 @@ const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({ title, onClose, c
             <style>{`
                 @media print {
                     .printable-area {
-                        padding: 0 !important;
+                        background: white !important;
+                        color: black !important;
                     }
                 }
             `}</style>
