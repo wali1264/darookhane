@@ -76,6 +76,11 @@ const PrintableSingleLabelSheet: React.FC<PrintableSingleLabelSheetProps> = ({ d
                         /* Force each label onto a new page */
                         page-break-after: always;
                     }
+
+                    /* This is the fix: Do not add a page break after the very last label */
+                    .label:last-of-type {
+                        page-break-after: auto;
+                    }
                 }
             `}</style>
         </>
