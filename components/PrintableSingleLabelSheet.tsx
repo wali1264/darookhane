@@ -58,19 +58,21 @@ const PrintableSingleLabelSheet: React.FC<PrintableSingleLabelSheetProps> = ({ d
                     }
 
                     @page {
-                        /* Size is inherited from user's printer settings. */
+                        size: auto; /* Let the printer driver determine the page size */
                         margin: 0;
                     }
 
-                    body, html {
+                    html, body {
+                        width: 100%;
+                        height: 100%;
                         margin: 0 !important;
                         padding: 0 !important;
                         background: white !important;
                     }
 
                     .label {
-                        width: 100vw;
-                        height: 100vh;
+                        width: 100%; /* Switched from vw for better print compatibility */
+                        height: 100%; /* Switched from vh */
                         border: none;
                         margin: 0;
                         padding: 0.2cm; /* Keep a small quiet zone */

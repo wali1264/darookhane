@@ -49,40 +49,25 @@ const Modal: React.FC<ModalProps> = ({ title, onClose, children, headerContent }
             visibility: hidden !important;
           }
 
-          /* 2. Make the specific modal instance and its children visible */
+          /* 2. Make the modal's content visible. */
           .modal-backdrop, .modal-backdrop * {
             visibility: visible !important;
           }
           
-          /* 3. Reset the modal's position and appearance to be a normal document */
-          .modal-backdrop {
-            position: absolute !important;
-            left: 0 !important;
-            top: 0 !important;
-            width: 100% !important;
-            height: auto !important;
-            padding: 0 !important;
-            background: transparent !important;
-            border: none !important;
-            overflow: visible !important;
+          /* 3. Collapse the modal wrappers so their content is promoted to the body for printing.
+             This is the key to removing the blank first page. */
+          .modal-backdrop, .modal-content-wrapper {
+            display: contents;
           }
-          .modal-content-wrapper {
-            width: 100% !important;
-            max-width: none !important;
-            height: auto !important;
-            max-height: none !important;
-            box-shadow: none !important;
-            border: none !important;
-            animation: none !important;
-            overflow: visible !important;
-          }
+
+          /* 4. The modal content is now effectively a direct child of the body. */
           .modal-content {
              padding: 0 !important;
              overflow: visible !important;
              height: auto !important;
           }
 
-          /* 4. Hide elements specifically marked not to be printed (like buttons) */
+          /* 5. Hide elements specifically marked not to be printed. */
           .print-hidden {
             display: none !important;
           }
