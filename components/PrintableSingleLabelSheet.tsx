@@ -75,6 +75,7 @@ const PrintableSingleLabelSheet: React.FC<PrintableSingleLabelSheetProps> = ({ d
                         margin: 0;
                         padding: 0.2cm; /* Keep a small quiet zone */
                         box-sizing: border-box;
+                        aspect-ratio: auto; /* Reset aspect ratio for printing on non-square pages */
                         /* This is the new page break strategy. A page break will happen AFTER each label.
                            Modern browsers are smart enough not to add a break after the very last one. */
                         page-break-after: always;
