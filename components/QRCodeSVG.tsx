@@ -959,27 +959,27 @@ const QRCodeSVG: React.FC<QRCodeSVGProps> = ({
     if (!value) return null;
 
     try {
-        // FIX: The Ecc class is a direct member of the qrcodegen namespace, not a static property of QrCode.
         const ecl = qrcodegen.Ecc[level];
         const qr = qrcodegen.QrCode.encodeText(value, ecl);
 
-        const quietZone = 4; // Standard quiet zone is 4 modules.
+        // The quiet zone is now handled by the parent container's CSS padding.
+        // The viewBox will be the exact size of the QR code modules.
         const moduleCount = qr.size;
-        const totalSize = moduleCount + quietZone * 2;
 
         let paths = '';
         for (let y = 0; y < moduleCount; y++) {
             for (let x = 0; x < moduleCount; x++) {
                 if (qr.getModule(x, y)) {
                     // M = move to, h = horizontal line, v = vertical line, z = close path
-                    paths += `M${x + quietZone},${y + quietZone}h1v1h-1z `;
+                    // We draw from (0,0) with no offset.
+                    paths += `M${x},${y}h1v1h-1z `;
                 }
             }
         }
 
         return (
             <svg
-                viewBox={`0 0 ${totalSize} ${totalSize}`}
+                viewBox={`0 0 ${moduleCount} ${moduleCount}`}
                 width={size}
                 height={size}
                 shapeRendering="crispEdges"
