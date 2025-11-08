@@ -44,47 +44,50 @@ const Modal: React.FC<ModalProps> = ({ title, onClose, children, headerContent }
         }
 
         @media print {
-          /* 1. Hide everything on the page by default */
+          /* 1. Hide everything on the page except for the modal's content */
           body > * {
             visibility: hidden !important;
           }
-
-          /* 2. Make the specific modal instance and its children visible */
           .modal-backdrop, .modal-backdrop * {
             visibility: visible !important;
           }
-          
-          /* 3. Reset the modal's position and appearance to be a normal document */
+
+          /* 2. THE DEFINITIVE FIX: Neuter the modal containers completely for print */
           .modal-backdrop {
-            position: absolute !important;
-            left: 0 !important;
-            top: 0 !important;
-            width: 100% !important;
-            height: auto !important;
-            padding: 0 !important;
-            background: transparent !important;
-            border: none !important;
+            position: static !important;
+            display: block !important; /* CRITICAL: Override 'flex' to stop centering */
             overflow: visible !important;
+            background: none !important;
+            padding: 0 !important;
+            margin: 0 !important;
+            border: none !important;
           }
           .modal-content-wrapper {
-            width: 100% !important;
+            width: auto !important;
             max-width: none !important;
             height: auto !important;
             max-height: none !important;
-            box-shadow: none !important;
+            margin: 0 !important;
+            padding: 0 !important;
             border: none !important;
+            box-shadow: none !important;
             animation: none !important;
-            overflow: visible !important;
           }
           .modal-content {
-             padding: 0 !important;
-             overflow: visible !important;
-             height: auto !important;
+            overflow: visible !important;
+            padding: 0 !important;
           }
 
-          /* 4. Hide elements specifically marked not to be printed (like buttons) */
+          /* 3. Hide any elements inside the modal marked as non-printable */
           .print-hidden {
             display: none !important;
+          }
+
+          /* 4. Basic body resets for a clean print output */
+          body, html {
+            background: white !important;
+            margin: 0 !important;
+            padding: 0 !important;
           }
         }
       `}</style>

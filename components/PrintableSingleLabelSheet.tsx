@@ -51,8 +51,11 @@ const PrintableSingleLabelSheet: React.FC<PrintableSingleLabelSheetProps> = ({ d
                 }
 
                 @media print {
+                    /* Make the container disappear from the layout, so its children (the labels)
+                       are treated as direct children of whatever contains this component.
+                       This prevents the container itself from causing a blank first page. */
                     .label-preview-container {
-                        display: block; /* Let labels flow naturally */
+                        display: contents;
                     }
 
                     @page {
@@ -67,17 +70,21 @@ const PrintableSingleLabelSheet: React.FC<PrintableSingleLabelSheetProps> = ({ d
                     }
 
                     .label {
-                        width: 100vw;
-                        height: 100vh;
+                        width: 100%;
+                        height: 100%;
                         border: none;
                         margin: 0;
                         padding: 0.2cm; /* Keep a small quiet zone */
                         box-sizing: border-box;
+
+                        /* Create a new page AFTER each label. This is a robust method. */
+                        page-break-after: always;
                     }
 
-                    /* THE FIX: Create a new page BEFORE each label, except for the very first one. */
-                    .label:not(:first-of-type) {
-                        page-break-before: always;
+                    /* CRITICAL FIX: The page-break-after on the last label would create a
+                       trailing blank page. This rule prevents that. */
+                    .label:last-child {
+                        page-break-after: avoid;
                     }
                 }
             `}</style>
