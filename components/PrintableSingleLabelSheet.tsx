@@ -1,6 +1,6 @@
 import React from 'react';
 import { Drug } from '../types';
-import QRCodeSVG from './QRCodeSVG'; // Changed from BarcodeSVG to QRCodeSVG
+import QRCodeSVG from './QRCodeSVG';
 
 interface PrintableSingleLabelSheetProps {
     drug: Drug;
@@ -10,7 +10,7 @@ interface PrintableSingleLabelSheetProps {
 const PrintableSingleLabelSheet: React.FC<PrintableSingleLabelSheetProps> = ({ drug, count }) => {
     return (
         <>
-            {/* This container is for screen preview only. On print, each .label becomes its own page. */}
+            {/* This container is for screen preview and printing. */}
             <div className="label-preview-container">
                 {Array.from({ length: count }).map((_, index) => (
                     <div key={index} className="label">
@@ -36,6 +36,7 @@ const PrintableSingleLabelSheet: React.FC<PrintableSingleLabelSheetProps> = ({ d
                     justify-content: center;
                     background-color: white;
                     aspect-ratio: 1 / 1; /* Square aspect ratio for QR Code */
+                    box-sizing: border-box;
                 }
                 .label-qrcode-wrapper {
                     width: 100%;
@@ -52,12 +53,13 @@ const PrintableSingleLabelSheet: React.FC<PrintableSingleLabelSheetProps> = ({ d
 
                 @media print {
                     .label-preview-container {
-                        display: block; /* Let labels flow naturally */
+                        display: block; /* Stack labels vertically */
                     }
 
                     @page {
-                        /* Size is inherited from user's printer settings. */
-                        margin: 0;
+                        /* Let the user define paper size and margins in the print dialog */
+                        size: auto;
+                        margin: 0mm;
                     }
 
                     body, html {
@@ -67,17 +69,11 @@ const PrintableSingleLabelSheet: React.FC<PrintableSingleLabelSheetProps> = ({ d
                     }
 
                     .label {
-                        width: 100vw;
-                        height: 100vh;
-                        border: none;
-                        margin: 0;
-                        padding: 0.2cm; /* Keep a small quiet zone */
-                        box-sizing: border-box;
-                    }
-
-                    /* THE FIX: Create a new page BEFORE each label, except for the very first one. */
-                    .label:not(:first-of-type) {
-                        page-break-before: always;
+                        width: 100%; /* Fill the width of the label paper */
+                        height: auto;
+                        /* The aspect-ratio from screen styles will maintain the square shape */
+                        page-break-inside: avoid; /* Prevent a label from splitting across pages */
+                        border: none; /* No border for the actual print */
                     }
                 }
             `}</style>
