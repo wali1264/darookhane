@@ -52,11 +52,10 @@ const Modal: React.FC<ModalProps> = ({ title, onClose, children, headerContent }
             visibility: visible !important;
           }
 
-          /* 2. THE FIX: Instead of 'display: contents', neutralize all modal container styles.
-             This preserves the DOM structure which is more stable for print layout engines,
-             while still allowing the content to take over the page. */
+          /* 2. THE DEFINITIVE FIX: Neuter the modal containers completely for print */
           .modal-backdrop {
             position: static !important;
+            display: block !important; /* CRITICAL: Override 'flex' to stop centering */
             overflow: visible !important;
             background: none !important;
             padding: 0 !important;

@@ -21,9 +21,9 @@ const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({ title, onClose, c
             <style>{`
                 @media print {
                     .printable-area {
-                        background: white !important;
-                        color: black !important;
-                        padding: 0 !important; /* THE FIX: Remove padding for print */
+                        /* THE DEFINITIVE FIX: Remove this wrapper from the print layout entirely
+                           to simplify the structure and prevent layout conflicts. */
+                        display: contents;
                     }
                 }
             `}</style>
