@@ -60,7 +60,9 @@ const BarcodeSVG: React.FC<BarcodeSVGProps> = ({
   totalWidth = currentX - narrowBarWidth; // Remove last inter-character gap
 
   return (
-    <svg width={totalWidth} height={height} aria-label={`Barcode for value ${value}`} preserveAspectRatio="none" viewBox={`0 0 ${totalWidth} ${height}`}>
+    // By setting preserveAspectRatio to "none", the barcode will stretch to fill the container, making the bars taller.
+    <svg viewBox={`0 0 ${totalWidth} ${height}`} preserveAspectRatio="none" style={{ height: '100%', width: '100%' }} aria-label={`Barcode for value ${value}`}>
+      <rect x={-10} y={0} width={totalWidth + 20} height={height} fill="white" />
       {bars.map((bar, index) => (
         <rect key={index} x={bar.x} y="0" width={bar.width} height={height} fill="black" />
       ))}
