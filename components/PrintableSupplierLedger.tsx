@@ -97,13 +97,14 @@ const PrintableSupplierLedger = React.forwardRef<HTMLDivElement, PrintableSuppli
                 }
                 @media print {
                     @page {
-                        /* size: A4; <-- REMOVED */
                         margin: 0.5cm;
                     }
                     .printable-area {
                         font-size: 7pt;
                         width: 100%;
-                        padding: 0;
+                        padding: 0.5cm;
+                        border: 0.1mm solid #333;
+                        box-sizing: border-box;
                         background: white !important;
                         color: black !important;
                     }
