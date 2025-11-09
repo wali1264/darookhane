@@ -47,11 +47,11 @@ const PrintableSupplierLedger = React.forwardRef<HTMLDivElement, PrintableSuppli
             <table className="w-full text-2xs text-right main-table border-collapse">
                 <thead>
                     <tr className="bg-gray-100">
-                        <th className="p-1 border">تاریخ</th>
-                        <th className="p-1 border text-right">شرح</th>
-                        <th className="p-1 border text-center">بدهکار</th>
-                        <th className="p-1 border text-center">بستانکار</th>
-                        <th className="p-1 border text-left">مانده</th>
+                        <th className="p-1 border" style={{ width: '18%' }}>تاریخ</th>
+                        <th className="p-1 border text-right" style={{ width: '34%' }}>شرح</th>
+                        <th className="p-1 border text-center" style={{ width: '16%' }}>بدهکار</th>
+                        <th className="p-1 border text-center" style={{ width: '16%' }}>بستانکار</th>
+                        <th className="p-1 border text-right" style={{ width: '16%' }}>مانده</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -63,7 +63,7 @@ const PrintableSupplierLedger = React.forwardRef<HTMLDivElement, PrintableSuppli
                             <td className="p-1 border text-right">{t.description} {t.detail ? `(${t.detail})` : ''}</td>
                             <td className="p-1 border text-center text-red-700">{t.debit > 0 ? `$${t.debit.toFixed(2)}` : '-'}</td>
                             <td className="p-1 border text-center text-green-700">{t.credit > 0 ? `$${t.credit.toFixed(2)}` : '-'}</td>
-                            <td className={`p-1 border text-left font-semibold ${t.balance < 0 ? 'text-green-800' : 'text-gray-900'}`}>
+                            <td className={`p-1 border text-right font-semibold ${t.balance < 0 ? 'text-green-800' : 'text-gray-900'}`}>
                                 ${Math.abs(t.balance).toFixed(2)}
                             </td>
                         </tr>
@@ -92,20 +92,26 @@ const PrintableSupplierLedger = React.forwardRef<HTMLDivElement, PrintableSuppli
             
             <style>{`
                 .text-2xs {
-                    font-size: 0.6rem; /* 7pt is roughly 0.6rem */
-                    line-height: 1.2;
+                    font-size: 0.7rem;
+                    line-height: 1.3;
                 }
                 @media print {
                     @page {
                         margin: 0.5cm;
                     }
                     .printable-area {
-                        font-size: 7pt;
+                        font-size: 8pt;
                         width: 100%;
                         padding: 0.5cm;
                         box-sizing: border-box;
                         background: white !important;
                         color: black !important;
+                    }
+                    .main-table {
+                        table-layout: fixed;
+                    }
+                    .main-table td, .main-table th {
+                        word-break: break-word;
                     }
                     .main-table thead {
                         display: table-header-group;

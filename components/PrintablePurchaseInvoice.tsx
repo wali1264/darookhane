@@ -30,30 +30,36 @@ const PrintablePurchaseInvoice = React.forwardRef<HTMLDivElement, PrintablePurch
         <p><span className="font-semibold">تامین‌کننده:</span> {supplierName}</p>
         <p><span className="font-semibold">تاریخ:</span> {new Date(invoice.date).toLocaleDateString('fa-IR')}</p>
       </div>
-      <table className="w-full text-2xs text-right border-collapse">
-        <thead>
-          <tr className="bg-gray-100">
-            <th className="p-1 font-semibold border text-gray-800 text-right">نام دارو</th>
-            <th className="p-1 font-semibold border text-gray-800 text-center">تعداد</th>
-            <th className="p-1 font-semibold border text-gray-800 text-center">قیمت</th>
-            <th className="p-1 font-semibold border text-gray-800 text-center">لات</th>
-            <th className="p-1 font-semibold border text-gray-800 text-center">انقضا</th>
-            <th className="p-1 font-semibold border text-gray-800 text-left">جمع</th>
-          </tr>
-        </thead>
-        <tbody>
-          {invoice.items.map((item, index) => (
-            <tr key={index} className="border-b text-gray-900">
-              <td className="p-1 border align-top font-medium text-right">{item.name}</td>
-              <td className="p-1 border align-top text-center">{item.quantity}</td>
-              <td className="p-1 border align-top text-center">${item.purchasePrice.toFixed(2)}</td>
-              <td className="p-1 border align-top text-center">{item.lotNumber}</td>
-              <td className="p-1 border align-top text-center">{new Date(item.expiryDate).toLocaleDateString('fa-IR')}</td>
-              <td className="p-1 border align-top text-left">${(item.quantity * item.purchasePrice).toFixed(2)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      
+      {/* New Vertical Layout */}
+      <div className="w-full text-xs text-right space-y-1">
+        {/* Header */}
+        <div className="flex font-semibold bg-gray-100 p-1 border-y border-gray-300">
+            <div style={{ width: '65%' }}>شرح</div>
+            <div style={{ width: '35%', textAlign: 'left' }}>جمع کل</div>
+        </div>
+        {/* Items */}
+        <div className="space-y-2 pt-1">
+            {invoice.items.map((item, index) => (
+                <div key={index} className="border-b border-dashed border-gray-200 pb-2">
+                    <div className="flex justify-between items-start">
+                        <span className="font-medium" style={{ width: '65%', wordBreak: 'break-word' }}>{item.name}</span>
+                        <span className="font-mono text-left" style={{ width: '35%' }}>${(item.quantity * item.purchasePrice).toFixed(2)}</span>
+                    </div>
+                    <div className="text-gray-600 text-2xs pr-2 mt-1">
+                        <span>تعداد: {item.quantity}</span>
+                        <span className="mx-1">|</span>
+                        <span>قیمت: ${item.purchasePrice.toFixed(2)}</span>
+                        <br/>
+                        <span>لات: {item.lotNumber}</span>
+                        <span className="mx-1">|</span>
+                        <span>انقضا: {new Date(item.expiryDate).toLocaleDateString('fa-IR')}</span>
+                    </div>
+                </div>
+            ))}
+        </div>
+      </div>
+
       <div className="mt-4 flex justify-end">
         <div className="w-full max-w-xs text-right">
           <div className="flex justify-between items-center p-2 bg-gray-100 rounded-md">
@@ -67,14 +73,15 @@ const PrintablePurchaseInvoice = React.forwardRef<HTMLDivElement, PrintablePurch
       </div>
        <style>{`
         .text-2xs {
-            font-size: 0.65rem;
+            font-size: 0.7rem;
+            line-height: 1.4;
         }
         @media print {
           @page {
             margin: 0.5cm;
           }
           .printable-area {
-            font-size: 8pt;
+            font-size: 9pt;
             width: 100%;
             padding: 0.5cm;
             box-sizing: border-box;
