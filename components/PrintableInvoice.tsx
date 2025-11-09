@@ -72,6 +72,7 @@ const PrintableInvoice = React.forwardRef<HTMLDivElement, PrintableInvoiceProps>
             font-size: 9pt;
             width: 100%;
             padding: 0.5cm;
+            border: 0.1mm solid #333;
             box-sizing: border-box;
             background: white !important;
             color: black !important;
